@@ -22,8 +22,6 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -33,26 +31,23 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'app/build.gradle.kts', 'build.gradle.kts') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Cache NDK
-        id: ndk-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ndk
-          key: ndk-r28-${{ runner.os }}
-
-      - name: Install NDK r28
-        if: steps.ndk-cache.outputs.cache-hit != 'true'
+      - name: Use the SDK that ships with the runner
         run: |
-          yes | sdkmanager --install "ndk;28.2.13676358" > /dev/null
-          mkdir -p "$RUNNER_TEMP/ndk"
-          cp -r "$ANDROID_SDK_ROOT/ndk/28.2.13676358/." "$RUNNER_TEMP/ndk/"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "--- installed before ---"
+          ls "$SDK/platforms" 2>/dev/null | tr '\n' ' '; echo
+          SM=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
+          if [ -n "$SM" ]; then
+            yes | "$SM" --install "platforms;android-36" "build-tools;35.0.0" > /dev/null 2>&1 || \
+              echo "::warning::sdkmanager could not add the packages, the build may stop on a missing platform"
+          fi
+          echo "--- installed after ---"
+          ls "$SDK/platforms" 2>/dev/null | tr '\n' ' '; echo
 
-      - name: Point Android SDK at the cached NDK
-        run: |
-          echo "ANDROID_NDK_HOME=$RUNNER_TEMP/ndk" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$RUNNER_TEMP/ndk" >> "$GITHUB_ENV"
-
-      - name: Build release APK
+      - name: Build the APK
         env:
           AEMU_KEYSTORE_B64: ${{ secrets.AEMU_KEYSTORE_B64 }}
           AEMU_KEYSTORE_PASSWORD: ${{ secrets.AEMU_KEYSTORE_PASSWORD }}
@@ -66,34 +61,36 @@ jobs:
               "$AEMU_KEYSTORE_PASSWORD" "$AEMU_KEY_ALIAS" "$AEMU_KEY_PASSWORD" > keystore.properties
             ./gradlew --no-daemon --stacktrace :app:assembleStandardRelease
           else
-            echo "::notice::No release key is configured, the APK is debug-signed (installable, not for distribution)."
+            echo "::notice::No release key is configured, the APK is debug-signed."
             ./gradlew --no-daemon --stacktrace :app:assembleStandardDebug
           fi
 
-      - name: Collect APK
+      - name: Collect the APK
         run: |
           mkdir -p out
           found=0
           for d in app/build/outputs/apk/standard/release app/build/outputs/apk/standard/debug; do
-            if [ -d "$d" ]; then
-              for f in "$d"/*.apk; do
-                [ -f "$f" ] || continue
-                cp "$f" out/app.aemu.apk
-                found=1
-              done
-            fi
+            [ -d "$d" ] || continue
+            for f in "$d"/*.apk; do
+              [ -f "$f" ] || continue
+              cp "$f" out/app.aemu.apk
+              found=1
+            done
           done
-          [ "$found" = 1 ] || { echo "no APK was produced"; exit 1; }
+          [ "$found" = 1 ] || { echo "::error::no APK was produced"; exit 1; }
           ls -lh out/
-          echo "APK_NAME=$(basename "$(ls out/*.apk | head -1)")" >> "$GITHUB_ENV"
 
-      - name: Check the package
+      - name: Describe the APK
         run: |
           APK=$(ls out/*.apk | head -1)
-          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
-          "$BT/aapt2" dump badging "$APK" 2>/dev/null | head -5 || \
-            "$BT/aapt" dump badging "$APK" 2>/dev/null | head -5 || true
-          "$BT/apksigner" verify --print-certs "$APK" 2>&1 | head -3 || echo "::warning::the APK is not signed"
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -V | tail -1)
+          if [ -n "$BT" ] && [ -x "$BT/aapt2" ]; then
+            "$BT/aapt2" dump badging "$APK" 2>/dev/null | head -4 || true
+          fi
+          if [ -n "$BT" ] && [ -x "$BT/apksigner" ]; then
+            "$BT/apksigner" verify --print-certs "$APK" 2>&1 | head -3 || true
+          fi
+          echo "size: $(du -h "$APK" | cut -f1)"
 
       - uses: actions/upload-artifact@v4
         with:
