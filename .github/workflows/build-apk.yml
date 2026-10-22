@@ -1,0 +1,103 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'app/build.gradle.kts', 'build.gradle.kts') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ndk
+          key: ndk-r28-${{ runner.os }}
+
+      - name: Install NDK r28
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          yes | sdkmanager --install "ndk;28.2.13676358" > /dev/null
+          mkdir -p "$RUNNER_TEMP/ndk"
+          cp -r "$ANDROID_SDK_ROOT/ndk/28.2.13676358/." "$RUNNER_TEMP/ndk/"
+
+      - name: Point Android SDK at the cached NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$RUNNER_TEMP/ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$RUNNER_TEMP/ndk" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        env:
+          AEMU_KEYSTORE_B64: ${{ secrets.AEMU_KEYSTORE_B64 }}
+          AEMU_KEYSTORE_PASSWORD: ${{ secrets.AEMU_KEYSTORE_PASSWORD }}
+          AEMU_KEY_ALIAS: ${{ secrets.AEMU_KEY_ALIAS }}
+          AEMU_KEY_PASSWORD: ${{ secrets.AEMU_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [ -n "$AEMU_KEYSTORE_B64" ]; then
+            echo "$AEMU_KEYSTORE_B64" | base64 -d > release.keystore
+            printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$AEMU_KEYSTORE_PASSWORD" "$AEMU_KEY_ALIAS" "$AEMU_KEY_PASSWORD" > keystore.properties
+            ./gradlew --no-daemon --stacktrace :app:assembleStandardRelease
+          else
+            echo "::notice::No release key is configured, the APK is debug-signed (installable, not for distribution)."
+            ./gradlew --no-daemon --stacktrace :app:assembleStandardDebug
+          fi
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          found=0
+          for d in app/build/outputs/apk/standard/release app/build/outputs/apk/standard/debug; do
+            if [ -d "$d" ]; then
+              for f in "$d"/*.apk; do
+                [ -f "$f" ] || continue
+                cp "$f" out/app.aemu.apk
+                found=1
+              done
+            fi
+          done
+          [ "$found" = 1 ] || { echo "no APK was produced"; exit 1; }
+          ls -lh out/
+          echo "APK_NAME=$(basename "$(ls out/*.apk | head -1)")" >> "$GITHUB_ENV"
+
+      - name: Check the package
+        run: |
+          APK=$(ls out/*.apk | head -1)
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          "$BT/aapt2" dump badging "$APK" 2>/dev/null | head -5 || \
+            "$BT/aapt" dump badging "$APK" 2>/dev/null | head -5 || true
+          "$BT/apksigner" verify --print-certs "$APK" 2>&1 | head -3 || echo "::warning::the APK is not signed"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-aemu-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30
