@@ -1,6 +1,7 @@
 package app.aemu.importer
 
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
