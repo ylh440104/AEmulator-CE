@@ -186,6 +186,51 @@ class Importer(
 
     private fun isTar(h: ByteArray) = h.size > 262 && String(h, 257, 5, Charsets.ISO_8859_1) == "ustar"
 
+    /**
+     * The entry that starts a partition's data: "<part>.new.dat", or its first slice when the vendor split the file
+     * (a 4 GB limit on the archive's file system: vivo cuts both system and vendor into 16 slices of 475 MB).
+     */
+    private fun entryNamed(entries: List<ZipArchiveEntry>, part: String): ZipArchiveEntry? =
+        entries.firstOrNull { it.name.matches(Regex("(.*/)?$part\\.new\\.dat")) }
+            ?: entries.firstOrNull { it.name.matches(Regex("(.*/)?$part\\.new\\.dat\\.1")) }
+            ?: entries.filter { it.name.matches(Regex("(.*/)?$part\\.new\\.dat\\.\\d+")) }
+                .minByOrNull { it.name.substringAfterLast('.').toIntOrNull() ?: Int.MAX_VALUE }
+
+    /**
+     * The bytes of an entry as one stream, the slices of a split data file joined in order. [entry] is either the
+     * whole file ("system.new.dat") or its first slice ("system.new.dat.1"); the rest follow by their number, and the
+     * base name has to match exactly, so "vendor.new.dat.3" never ends up in the system one.
+     */
+    private fun fatEntryStream(zip: ZipFile, entry: ZipArchiveEntry): InputStream {
+        val m = Regex("^(.*)\\.new\\.dat(?:\\.(\\d+))?$").find(entry.name.replace('\\', '/'))
+        // (a Brotli-compressed data file is never split: it has to be inflated before anything can be read)
+        if (m == null || entry.name.endsWith(".br", true)) return zip.getInputStream(entry)
+        val dir = m.groupValues[1]
+        val slices = zip.entries.toList()
+            .mapNotNull { e -> Regex("^${Regex.escape(dir)}\\.new\\.dat\\.(\\d+)$").find(e.name.replace('\\', '/'))
+                ?.let { mm -> (mm.groupValues[1].toIntOrNull() ?: return@mapNotNull null) to e } }
+            .sortedBy { it.first }
+        if (slices.isEmpty()) return zip.getInputStream(entry)
+        // ("system.new.dat" holds no bytes when the file was split: the slices carry all of it)
+        log("${dir.substringAfterLast('/')}: ${slices.size} slices joined (${slices.sumOf { it.second.size } shr 20} MB)")
+        return object : InputStream() {
+            private var i = 0
+            private var cur: InputStream? = null
+            override fun read(): Int { val b = ByteArray(1); return if (read(b, 0, 1) <= 0) -1 else b[0].toInt() and 0xff }
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (len == 0) return 0
+                while (true) {
+                    val c = cur ?: if (i < slices.size) zip.getInputStream(slices[i++].second).also { cur = it } else return -1
+                    val n = c.read(b, off, len)
+                    if (n > 0) return n
+                    runCatching { c.close() }
+                    cur = null
+                }
+            }
+            override fun close() { runCatching { cur?.close() }; cur = null }
+        }
+    }
+
     /** gzip, xz, bzip2 */
     private fun isCompressed(h: ByteArray) = h.size > 2 && (h[0] == 0x1f.toByte() && h[1] == 0x8b.toByte() ||
         h[0] == 0xfd.toByte() && h[1] == '7'.code.toByte() || h[0] == 'B'.code.toByte() && h[1] == 'Z'.code.toByte() && h[2] == 'h'.code.toByte())
@@ -230,12 +275,18 @@ class Importer(
             ?.name?.substringBefore("META-INF/")?.takeIf { it.isNotEmpty() && it.count { c -> c == '/' } == 1 } ?: ""
         if (wrap.isNotEmpty()) log("archive with wrapper folder \"${wrap.trimEnd('/')}\"")
         val names = entries.map { it.name.removePrefix(wrap) }.toSet()
-        val datBr = entries.firstOrNull { it.name.matches(Regex("(.*/)?system\\.new\\.dat(\\.br)?")) }
+        val datBr = entryNamed(entries, "system")
         val sparseChunks = entries.filter { it.name.matches(Regex("(.*/)?system\\.img_sparsechunk\\.\\d+")) }.sortedBy { it.name.substringAfterLast('.').toInt() }
+        // vendor firmware keeps the images a recovery would flash under firmware-update/ (vivo, OPPO, Xiaomi's
+        // super images), out of reach of the rules below, which look at the entry's own name
+        val fwDir = entries.firstOrNull { e -> !e.isDirectory && e.name.contains("firmware-update/") }
+            ?.name?.substringBefore("firmware-update/")?.plus("firmware-update/")
         for (e in entries) {
             if (cancelled) throw IOException("cancelled")
             val n = e.name.replace('\\', '/').removePrefix(wrap)
             val base = n.substringAfterLast('/')
+            // (a boot image of a vendor package: the ramdisk, and the recovery next to it)
+            val inFw = fwDir != null && n.startsWith(fwDir) && n.count { it == '/' } == fwDir.count { it == '/' }
             when {
                 e.isDirectory -> {}
                 n.contains("__MACOSX/") || base.startsWith("._") -> {}
@@ -243,10 +294,18 @@ class Importer(
                     zip.getInputStream(e).use { writeFile(n, it, e.unixMode.takeIf { m -> m != 0 }) }
                     gotSystem = true
                 }
-                base.equals("boot.img", true) -> zip.getInputStream(e).use { takeBoot(it.readBytes()) }
-                base.equals("recovery.img", true) && e.size < 64_000_000 -> zip.getInputStream(e).use { recovery = it.readBytes() }
-                base.matches(SYSTEM_IMAGE) ->
-                    withEntrySource(zip, e) { importImage(it, "system") }
+                base.equals("boot.img", true) || inFw && base.matches(Regex("(?i)boot(_a)?\\.img")) ->
+                    zip.getInputStream(e).use { takeBoot(it.readBytes()) }
+                base.equals("recovery.img", true) || inFw && base.matches(Regex("(?i)recovery(_a)?\\.img")) ->
+                    if (e.size < 512_000_000) zip.getInputStream(e).use { recovery = it.readBytes() }
+                inFw && base.matches(Regex("(?i)super(\\.sparse)?\\.img")) -> withEntrySource(zip, e) { importImage(it, "system") }
+                inFw && base.matches(Regex("(?i)(system|vendor|product|system_ext|odm)(\\.sparse)?\\.img")) -> {
+                    val part = base.substringBefore('.').lowercase()
+                    withEntrySource(zip, e) {
+                        runCatching { importImage(it, if (part == "vendor" || part == "odm") part else "system/$part") }
+                            .onFailure { err -> log("$part.img: ${err.message}") }
+                    }
+                }
                 base.equals("payload.bin", true) -> withEntrySource(zip, e) { importPayload(it) }
                 // Sony .ftf: system.sin is the system partition, kernel.sin the kernel with the ramdisk
                 base.matches(Regex("(?i)(system|kernel|boot)\\.sin")) && !(gotSystem && base.startsWith("system", true)) ->
@@ -274,7 +333,7 @@ class Importer(
             val list = zip.getInputStream(listE).use { String(it.readBytes()) }
             onProgress("Building system.img from OTA", 0.5f)
             val raw = File(tmp, "system.raw")
-            zip.getInputStream(datBr).use { s ->
+            fatEntryStream(zip, datBr).use { s ->
                 val data = if (datBr.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
                 TransferList.build(list, data, raw)
             }
@@ -283,11 +342,11 @@ class Importer(
             // a Treble OTA (8.0+) carries the vendor partition the same way; the firmware's apps and overlays live there.
             // With dynamic partitions (10+) product, system_ext and odm come as their own data files too.
             for (p in listOf("vendor", "product", "system_ext", "odm")) {
-                val pDat = entries.firstOrNull { it.name == datBr.name.replace("system.new.dat", "$p.new.dat") } ?: continue
+                val pDat = entryNamed(entries, p) ?: continue
                 val pList = entries.firstOrNull { it.name == listName.replace("system.transfer.list", "$p.transfer.list") } ?: continue
                 runCatching {
                     onProgress("Building $p.img from OTA", 0.8f)
-                    zip.getInputStream(pDat).use { s ->
+                    fatEntryStream(zip, pDat).use { s ->
                         val data = if (pDat.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
                         TransferList.build(zip.getInputStream(pList).use { String(it.readBytes()) }, data, raw)
                     }
