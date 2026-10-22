@@ -63,6 +63,7 @@ jobs:
       - name: Import it with the app's own unpacker
         run: |
           chmod +x gradlew
+          set -o pipefail
           ./gradlew --no-daemon --stacktrace :probe:run \
             -Pfirmware="$(pwd)/fw/firmware.zip" \
             -Pwork="$(pwd)/fw/work" 2>&1 | tee probe.log

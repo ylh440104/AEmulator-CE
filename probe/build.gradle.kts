@@ -15,10 +15,10 @@ kotlin {
 sourceSets {
     main {
         kotlin.srcDirs(rootProject.file("tools/probe"))
-        kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer/Formats.kt"))
-        kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer/Ext4Reader.kt"))
-        kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer/SparseSource.kt"))
-        kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer/TransferList.kt"))
+        kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer"))
+        kotlin {
+            exclude("Importer.kt", "Analyzer.kt", "BootImage.kt", "ErofsImage.kt", "StorageList.kt")
+        }
     }
 }
 
