@@ -197,22 +197,32 @@ class Importer(
                 .minByOrNull { it.name.substringAfterLast('.').toIntOrNull() ?: Int.MAX_VALUE }
 
     /**
-     * The bytes of an entry as one stream, the slices of a split data file joined in order. [entry] is either the
-     * whole file ("system.new.dat") or its first slice ("system.new.dat.1"); the rest follow by their number, and the
-     * base name has to match exactly, so "vendor.new.dat.3" never ends up in the system one.
+     * The bytes of an entry as one stream, the slices of a split data file joined in order.
+     *
+     * A vendor that had to stay under its archive's file size limit cuts both "system.new.dat" and the remaining
+     * slices: vivo's package carries 16 pieces of 475 MB, the first of them under the plain name. So the base entry
+     * counts as the first slice whenever it has bytes of its own; a package that only uses it as a placeholder
+     * (0 bytes) starts at ".1". The base name has to match exactly, so "vendor.new.dat.3" never ends up in system.
      */
     private fun fatEntryStream(zip: ZipFile, entry: ZipArchiveEntry): InputStream {
         val m = Regex("^(.*)\\.new\\.dat(?:\\.(\\d+))?$").find(entry.name.replace('\\', '/'))
         // (a Brotli-compressed data file is never split: it has to be inflated before anything can be read)
         if (m == null || entry.name.endsWith(".br", true)) return zip.getInputStream(entry)
         val dir = m.groupValues[1]
-        val slices = zip.entries.toList()
+        val numbered = zip.entries.toList()
             .mapNotNull { e -> Regex("^${Regex.escape(dir)}\\.new\\.dat\\.(\\d+)$").find(e.name.replace('\\', '/'))
                 ?.let { mm -> (mm.groupValues[1].toIntOrNull() ?: return@mapNotNull null) to e } }
             .sortedBy { it.first }
-        if (slices.isEmpty()) return zip.getInputStream(entry)
-        // ("system.new.dat" holds no bytes when the file was split: the slices carry all of it)
-        log("${dir.substringAfterLast('/')}: ${slices.size} slices joined (${slices.sumOf { it.second.size } shr 20} MB)")
+        val base = Regex("^${Regex.escape(dir)}\\.new\\.dat$").let { re ->
+            zip.entries.toList().firstOrNull { re.matches(it.name.replace('\\', '/')) }
+        }
+        val parts = ArrayList<ZipArchiveEntry>()
+        // the base entry is a piece of the file only when it carries bytes: a package that uses it as an empty
+        // placeholder (0 bytes) starts at ".1", and one that put real data in it (vivo) starts at the base
+        if (base != null && base.size > 0) parts.add(base)
+        parts.addAll(numbered.map { it.second })
+        if (parts.size <= 1) return zip.getInputStream(entry)
+        log("${dir.substringAfterLast('/')}: ${parts.size} pieces joined (${parts.sumOf { it.size } shr 20} MB)")
         return object : InputStream() {
             private var i = 0
             private var cur: InputStream? = null
@@ -220,7 +230,7 @@ class Importer(
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 if (len == 0) return 0
                 while (true) {
-                    val c = cur ?: if (i < slices.size) zip.getInputStream(slices[i++].second).also { cur = it } else return -1
+                    val c = cur ?: if (i < parts.size) zip.getInputStream(parts[i++]).also { cur = it } else return -1
                     val n = c.read(b, off, len)
                     if (n > 0) return n
                     runCatching { c.close() }

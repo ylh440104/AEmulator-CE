@@ -51,18 +51,23 @@ private fun probeZip(zipFile: File, work: File): String {
 private fun probeNewDat(z: ZipFile, work: File, datNames: List<String>) {
     val entries = z.entries().toList()
     val base = entries.firstOrNull { it.name.matches(Regex("(.*/)?system\\.new\\.dat")) }
-    val slices = entries.filter { it.name.matches(Regex("(.*/)?system\\.new\\.dat\\.\\d+")) }
+    val numbered = entries.filter { it.name.matches(Regex("(.*/)?system\\.new\\.dat\\.\\d+")) }
         .sortedBy { it.name.substringAfterLast('.').toIntOrNull() ?: 0 }
     val listE = entries.firstOrNull { it.name.matches(Regex("(.*/)?system\\.transfer\\.list")) }
-    if (base == null && slices.isEmpty()) { println("== no system.new.dat at all"); return }
+    if (base == null && numbered.isEmpty()) { println("== no system.new.dat at all"); return }
     if (listE == null) { println("== system.transfer.list is missing: TransferList cannot place the blocks"); return }
+    // the base entry is a piece of the file when it carries bytes (vivo); an empty placeholder starts at ".1"
+    val parts = ArrayList<java.util.zip.ZipEntry>()
+    if (base != null && base.size > 0) parts.add(base)
+    parts.addAll(numbered)
     println("== system: base entry ${if (base != null) "${base.size} B" else "none"}, " +
-        "${slices.size} slices (${slices.sumOf { it.size } / 1048576} MB), transfer.list ${listE.size} B")
+        "${numbered.size} numbered slices (${numbered.sumOf { it.size } / 1048576} MB), " +
+        "${parts.size} pieces joined (${parts.sumOf { it.size } / 1048576} MB), transfer.list ${listE.size} B")
     val list = z.getInputStream(listE).use { String(it.readBytes()) }
     val ver = list.lineSequence().firstOrNull()?.trim()
     println("   transfer.list version $ver")
     val img = File(work, "system.img")
-    val stream = if (slices.isNotEmpty()) joinedSlices(z, slices) else z.getInputStream(base!!)
+    val stream = if (parts.size > 1) joinedSlices(z, parts) else z.getInputStream(base ?: parts[0])
     val t0 = System.currentTimeMillis()
     try {
         stream.use { s ->
