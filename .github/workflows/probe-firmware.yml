@@ -1,0 +1,111 @@
+name: Probe a firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Firmware URL (A/B OTA zip or payload.bin). Empty: latest LineageOS 23.2 for sunfish.'
+        required: false
+        default: ''
+      keep_payload:
+        description: 'Keep the extracted payload.bin and partition images as an artifact'
+        type: boolean
+        default: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost || true
+          df -h / | tail -1
+
+      - name: Pick the firmware
+        id: pick
+        run: |
+          set -euo pipefail
+          URL="${{ github.event.inputs.url }}"
+          if [ -z "$URL" ]; then
+            echo "No URL given, asking the LineageOS mirror list for the newest 23.2 (Android 16) build of sunfish."
+            URL=$(curl -fsSL --max-time 120 https://mirrorbits.lineageos.org/api/v2/builds/ | python3 -c '
+          import json,sys
+          d=json.load(sys.stdin)
+          rows=[]
+          for b in d.get("sunfish",[]):
+              for f in b.get("files",[]):
+                  fn=f["filename"]
+                  if fn.startswith("lineage-23.2") and fn.endswith(".zip"):
+                      rows.append((b["date"], f["filepath"], fn, f.get("size",0)))
+          rows.sort()
+          print("https://mirrorbits.lineageos.org"+rows[-1][1] if rows else "")
+          ')
+          fi
+          [ -n "$URL" ] || { echo "::error::no firmware URL"; exit 1; }
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "chosen: $URL"
+
+      - name: Download
+        run: |
+          mkdir -p fw
+          curl -fL --retry 3 --retry-delay 5 --max-time 3600 -o fw/firmware.zip "${{ steps.pick.outputs.url }}"
+          ls -lh fw/
+          df -h / | tail -1
+
+      - name: Import it with the app's own unpacker
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :probe:run \
+            -Pfirmware="$(pwd)/fw/firmware.zip" \
+            -Pwork="$(pwd)/fw/work" 2>&1 | tee probe.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Firmware probe"
+            echo ""
+            echo "- source: ${{ steps.pick.outputs.url }}"
+            echo ""
+            echo '```'
+            grep -E '^(==|--|   )' probe.log | head -120 || echo "no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: What it takes to boot it
+        if: always()
+        run: |
+          {
+            echo "### What the app would do with it"
+            for p in system vendor product system_ext odm; do
+              f="fw/work/$p.img"
+              [ -f "$f" ] && echo "- $p: $(du -h "$f" | cut -f1) ext4 image, unpacked"
+            done
+            echo ""
+            echo "Booting is a separate matter: the VM needs the phone's GPU, audio, binder and /dev nodes."
+            echo "This job only runs the import half, which is plain JVM code."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-log
+          path: probe.log
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: github.event.inputs.keep_payload == 'true'
+        with:
+          name: firmware-images
+          path: |
+            fw/work/*.img
+          if-no-files-found: warn
+          retention-days: 7

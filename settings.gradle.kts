@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "AEmulator"
 include(":app")
+include(":probe")
