@@ -117,6 +117,8 @@
     <string name="m_sms">Fake SMS</string>
     <string name="m_battery">Battery</string>
     <string name="m_screenshot">Screenshot</string>
+    <string name="m_export_logs">导出日志</string>
+    <string name="m_logs_saved">日志已保存</string>
     <string name="m_settings">Open Android settings</string>
     <string name="m_reboot">Reboot</string>
     <string name="m_clip_empty">Clipboard is empty</string>

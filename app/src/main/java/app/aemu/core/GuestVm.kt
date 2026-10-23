@@ -67,7 +67,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private var zygoteRestarts = 0
         private set
     @Volatile var failure: String? = null
-        private set
+    /** the same failure in words the user can act on, and the log lines it was read from */
+    @Volatile var lastFailure: String? = null
+    @Volatile var lastReasons: List<String> = emptyList()
     @Volatile var surface: Surface? = null
         set(v) { field = v; if (engine == Engine.KK) GlBridge.surface(v) else if (engine == Engine.N64 && kernel.gpuBridge64) GlHost.surface(v) }
 
@@ -89,7 +91,21 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun lines(): List<String> = lines.toList()
     fun onLog(l: (String) -> Unit) { listeners.add(l) }
     fun onState(l: (State) -> Unit) { stateListeners.add(l) }
-    private fun setState(s: State) { state = s; stateListeners.forEach { runCatching { it(s) } } }
+    private fun setState(s: State) {
+        state = s
+        stateListeners.forEach { runCatching { it(s) } }
+        // a system that died leaves behind the only evidence there is: gather it where the user can reach it
+        if (s == State.FAILED && !exported) {
+            exported = true
+            runCatching {
+                val dir = CrashDigest.export(ctx, paths, img, lastFailure ?: failure)
+                log("logs saved to ${dir.absolutePath}")
+            }.onFailure { log("logs could not be saved: ${it.message}") }
+        }
+    }
+
+    /** the failure export runs once per boot, not on every restart of a dying system */
+    @Volatile private var exported = false
 
     val props = PropService(paths, ::log)
     /** ADB over the LAN, switched on from the VM menu */
@@ -510,7 +526,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         bootAt = System.currentTimeMillis()
         bootDoneAt = 0
         screenUpAt = 0
-        everBooted = false; zygoteRestarts = 0; zygoteCrashes.clear()
+        everBooted = false; zygoteRestarts = 0; zygoteCrashes.clear(); exported = false
+        lastFailure = null; lastReasons = emptyList()
         setState(State.BOOTING)
 
         // 4. binder
@@ -1057,10 +1074,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
                         if (state != State.FAILED && bootDoneAt == 0L && !(everBooted && zygoteRestarts < 6)) {
-                            failure = "$name exited (code $code)" + if (code == 137) " — killed: the phone ran out of memory, or system_server died and took zygote with it (see the guest log)" else ""
-                            if (code == 137 && guestLogHas("No original dex files found"))
-                                failure = "system_server cannot start: the precompiled code of the framework (system/framework/oat) is missing from this container — import the firmware again"
-                            log("✖ $failure"); setState(State.FAILED)
+                            // the exit code alone does not tell an out-of-memory kill from a library that will not load
+                            // or a framework whose precompiled code is missing: the guest log does, so it is read here
+                            val why = runCatching { CrashDigest.reasons(paths.root) }.getOrDefault(emptyList())
+                            val explained = if (code == 137 && why.any { it.contains("No original dex files found") })
+                                "system_server cannot start: the precompiled code of the framework (system/framework/oat) is missing from this container — import the firmware again"
+                            else CrashDigest.explain(paths.root, code, why)
+                            failure = "$name ${CrashDigest.byCode(code).substringAfter(':').trim()}"
+                            if (why.isNotEmpty()) failure = "$name: $explained"
+                            lastFailure = explained
+                            lastReasons = why
+                            log("✖ $failure")
+                            why.take(6).forEach { log("   $it") }
+                            setState(State.FAILED)
                         } else if (plannedRestart) {
                             plannedRestart = false
                             killZygoteChildren()

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Videocam
@@ -397,7 +398,20 @@ class VmActivity : ComponentActivity() {
         }
         guestAsync(script)
     }
-
+    /**
+     * Every log the image keeps, gathered into a folder on the shared storage: the host side journal, each guest
+     * buffer decoded to text, and a summary of the device and the last failure. Written on a failure by itself, and
+     * from the menu at any time.
+     */
+    private fun exportLogs() {
+        thread {
+            val dir = runCatching {
+                app.aemu.core.CrashDigest.export(this, vm.paths, vm.img, vm.lastFailure ?: vm.failure)
+            }.getOrNull()
+            if (dir == null) { toast(getString(R.string.m_failed)); return@thread }
+            toast("${getString(R.string.m_logs_saved)}: ${dir.absolutePath}")
+        }
+    }
     /**
      * The frame is taken on the host (the fb0 copy, or the GPU bridge's surface through PixelCopy): `screencap` does
      * not exist before 4.0 and cannot read the bridge's frames. The PNG lands in the guest's Pictures folder.
@@ -774,6 +788,8 @@ class VmActivity : ComponentActivity() {
                     }
                     DropdownMenuItem(text = { Text(stringResource(R.string.m_screenshot)) }, leadingIcon = { Icon(Icons.Rounded.Screenshot, null) },
                         enabled = state == GuestVm.State.RUNNING, onClick = { menu = false; screenshot() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.m_export_logs)) }, leadingIcon = { Icon(Icons.Rounded.Description, null) },
+                        onClick = { menu = false; exportLogs() })
                     DropdownMenuItem(text = { Text(stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record)) },
                         leadingIcon = { Icon(Icons.Rounded.Videocam, null) },
                         enabled = state == GuestVm.State.RUNNING || recOn.value, onClick = { menu = false; toggleRecording() })
