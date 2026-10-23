@@ -1,6 +1,7 @@
 package app.aemu.core
 
 import android.content.Context
+import app.aemu.BuildConfig
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
