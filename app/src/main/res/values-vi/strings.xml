@@ -15,7 +15,7 @@
     <string name="name">Tên</string>
     <string name="save">Lưu</string>
     <string name="storage_title">Thư mục chung cho hệ thống</string>
-    <string name="storage_text">Cho phép truy cập mọi tệp: thẻ nhớ của mỗi hệ thống sẽ nằm trong thư mục AEmulator của bộ nhớ trong — tiện để chép APK, nhạc và ảnh.</string>
+    <string name="storage_text">Cho phép truy cập mọi tệp: thẻ nhớ của mỗi hệ thống sẽ nằm trong thư mục AEmulatorCE của bộ nhớ trong — tiện để chép APK, nhạc và ảnh.</string>
     <string name="allow">Cho phép</string>
     <string name="empty_title">Chưa có hệ thống nào</string>
     <string name="empty_text">Thêm firmware ARM cho Android 2.3–6.0: ZIP recovery, gói Odin (.tar.md5), system.img hoặc factory image.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">Mã nguồn trên GitHub</string>
     <string name="as_copied">Đã sao chép địa chỉ</string>
     <string name="as_version">Phiên bản %1$s</string>
-    <string name="as_about">AEmulator chạy firmware Android cổ điển trên điện thoại hiện đại. Miễn phí và mã nguồn mở.</string>
+    <string name="as_about">AEmulator CE chạy firmware Android cổ điển trên điện thoại hiện đại. Miễn phí và mã nguồn mở.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

@@ -15,7 +15,7 @@
     <string name="name">Название</string>
     <string name="save">Сохранить</string>
     <string name="storage_title">Общая папка с системами</string>
-    <string name="storage_text">Разрешите доступ ко всем файлам — тогда «карта памяти» каждой системы будет лежать в папке AEmulator внутренней памяти, и туда удобно класть APK, музыку и фото.</string>
+    <string name="storage_text">Разрешите доступ ко всем файлам — тогда «карта памяти» каждой системы будет лежать в папке AEmulatorCE внутренней памяти, и туда удобно класть APK, музыку и фото.</string>
     <string name="allow">Разрешить</string>
     <string name="empty_title">Пока нет ни одной системы</string>
     <string name="empty_text">Добавьте прошивку Android 2.3–6.0 для ARM: ZIP для рекавери, архив Odin (.tar.md5), system.img или factory-образ.</string>
@@ -95,7 +95,7 @@
     <string name="as_github">Исходный код на GitHub</string>
     <string name="as_copied">Адрес скопирован</string>
     <string name="as_version">Версия %1$s</string>
-    <string name="as_about">AEmulator запускает старые прошивки Android на современных телефонах. Бесплатно и с открытым кодом.</string>
+    <string name="as_about">AEmulator CE запускает старые прошивки Android на современных телефонах. Бесплатно и с открытым кодом.</string>
     <string name="log_copy">Копировать</string>
     <string name="log_export">Экспорт .log</string>
     <string name="log_copied">Скопировано в буфер обмена</string>

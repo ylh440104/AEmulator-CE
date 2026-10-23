@@ -109,7 +109,6 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
     var dynamic by remember { mutableStateOf(AppPrefs.dynamicColor(ctx)) }
-    var autoUpdates by remember { mutableStateOf(AppPrefs.autoCheckUpdates(ctx)) }
     fun open(url: String) = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     fun copy(text: String) {
         (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("address", text))
@@ -133,20 +132,6 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item { AboutCard() }
-
-            item {
-                Section(stringResource(R.string.as_updates)) {
-                    Toggle(
-                        stringResource(R.string.as_auto_updates),
-                        stringResource(R.string.as_auto_updates_sub),
-                        autoUpdates
-                    ) {
-                        autoUpdates = it
-                        AppPrefs.setAutoCheckUpdates(ctx, it)
-                    }
-                }
-            }
-
             item {
                 Section(stringResource(R.string.as_appearance)) {
                     Row_(Icons.Rounded.Translate, stringResource(R.string.as_language), langName) { langDialog = true }
@@ -235,7 +220,7 @@ private fun AboutCard() {
             Image(painterResource(R.drawable.logo), null, Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text("AEmulator", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("AEmulator CE", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Text(stringResource(R.string.as_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Spacer(Modifier.height(4.dp))

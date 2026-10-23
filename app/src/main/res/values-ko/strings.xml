@@ -15,7 +15,7 @@
     <string name="name">이름</string>
     <string name="save">저장</string>
     <string name="storage_title">시스템 공유 폴더</string>
-    <string name="storage_text">모든 파일 접근을 허용하면 각 시스템의 메모리 카드가 내부 저장소의 AEmulator 폴더에 생겨 APK, 음악, 사진을 넣기 편합니다.</string>
+    <string name="storage_text">모든 파일 접근을 허용하면 각 시스템의 메모리 카드가 내부 저장소의 AEmulatorCE 폴더에 생겨 APK, 음악, 사진을 넣기 편합니다.</string>
     <string name="allow">허용</string>
     <string name="empty_title">아직 시스템이 없습니다</string>
     <string name="empty_text">Android 2.3–6.0용 ARM 펌웨어를 추가하세요: 리커버리 ZIP, Odin 아카이브(.tar.md5), system.img 또는 팩토리 이미지.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">GitHub 소스 코드</string>
     <string name="as_copied">주소가 복사되었습니다</string>
     <string name="as_version">버전 %1$s</string>
-    <string name="as_about">AEmulator는 최신 휴대폰에서 클래식 Android 펌웨어를 실행합니다. 무료 오픈 소스입니다.</string>
+    <string name="as_about">AEmulator CE는 최신 휴대폰에서 클래식 Android 펌웨어를 실행합니다. 무료 오픈 소스입니다.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

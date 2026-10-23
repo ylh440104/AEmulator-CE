@@ -15,7 +15,7 @@
     <string name="name">Ad</string>
     <string name="save">Kaydet</string>
     <string name="storage_title">Sistemler için ortak klasör</string>
-    <string name="storage_text">Tüm dosyalara erişime izin verin: her sistemin hafıza kartı dahili depolamadaki AEmulator klasöründe olur; APK, müzik ve fotoğraflar için kullanışlıdır.</string>
+    <string name="storage_text">Tüm dosyalara erişime izin verin: her sistemin hafıza kartı dahili depolamadaki AEmulatorCE klasöründe olur; APK, müzik ve fotoğraflar için kullanışlıdır.</string>
     <string name="allow">İzin ver</string>
     <string name="empty_title">Henüz sistem yok</string>
     <string name="empty_text">Android 2.3–6.0 için bir ARM yazılımı ekleyin: recovery ZIP, Odin arşivi (.tar.md5), system.img veya fabrika imajı.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">GitHub’da kaynak kod</string>
     <string name="as_copied">Adres kopyalandı</string>
     <string name="as_version">Sürüm %1$s</string>
-    <string name="as_about">AEmulator klasik Android yazılımlarını modern telefonlarda çalıştırır. Ücretsiz ve açık kaynak.</string>
+    <string name="as_about">AEmulator CE klasik Android yazılımlarını modern telefonlarda çalıştırır. Ücretsiz ve açık kaynak.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

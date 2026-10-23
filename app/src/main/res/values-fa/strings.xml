@@ -15,7 +15,7 @@
     <string name="name">نام</string>
     <string name="save">ذخیره</string>
     <string name="storage_title">پوشهٔ مشترک سیستم‌ها</string>
-    <string name="storage_text">دسترسی به همهٔ فایل‌ها را مجاز کنید: کارت حافظهٔ هر سیستم در پوشهٔ AEmulator حافظهٔ داخلی قرار می‌گیرد که برای APK، موسیقی و عکس مناسب است.</string>
+    <string name="storage_text">دسترسی به همهٔ فایل‌ها را مجاز کنید: کارت حافظهٔ هر سیستم در پوشهٔ AEmulatorCE حافظهٔ داخلی قرار می‌گیرد که برای APK، موسیقی و عکس مناسب است.</string>
     <string name="allow">اجازه</string>
     <string name="empty_title">هنوز سیستمی نیست</string>
     <string name="empty_text">یک فرم‌ویر ARM برای اندروید 2.3 تا 6.0 اضافه کنید: ZIP ریکاوری، آرشیو Odin ‏(.tar.md5)، system.img یا ایمیج کارخانه.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">کد منبع در GitHub</string>
     <string name="as_copied">نشانی کپی شد</string>
     <string name="as_version">نسخهٔ %1$s</string>
-    <string name="as_about">AEmulator فرم‌ویرهای کلاسیک اندروید را روی گوشی‌های مدرن اجرا می‌کند. رایگان و متن‌باز.</string>
+    <string name="as_about">AEmulator CE فرم‌ویرهای کلاسیک اندروید را روی گوشی‌های مدرن اجرا می‌کند. رایگان و متن‌باز.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

@@ -15,7 +15,7 @@
     <string name="name">名前</string>
     <string name="save">保存</string>
     <string name="storage_title">システム用の共有フォルダー</string>
-    <string name="storage_text">すべてのファイルへのアクセスを許可すると、各システムのメモリーカードが内部ストレージの AEmulator フォルダーに置かれ、APK や音楽、写真を入れやすくなります。</string>
+    <string name="storage_text">すべてのファイルへのアクセスを許可すると、各システムのメモリーカードが内部ストレージの AEmulatorCE フォルダーに置かれ、APK や音楽、写真を入れやすくなります。</string>
     <string name="allow">許可</string>
     <string name="empty_title">まだシステムがありません</string>
     <string name="empty_text">Android 2.3〜6.0 の ARM ファームウェアを追加してください：リカバリー用 ZIP、Odin アーカイブ（.tar.md5）、system.img、またはファクトリーイメージ。</string>
@@ -92,7 +92,7 @@
     <string name="as_github">GitHub のソースコード</string>
     <string name="as_copied">アドレスをコピーしました</string>
     <string name="as_version">バージョン %1$s</string>
-    <string name="as_about">AEmulator は最新のスマホで懐かしの Android ファームウェアを動かします。無料でオープンソースです。</string>
+    <string name="as_about">AEmulator CE は最新のスマホで懐かしの Android ファームウェアを動かします。無料でオープンソースです。</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

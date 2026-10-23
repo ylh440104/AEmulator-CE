@@ -7,7 +7,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Общая папка «карты памяти»: лежит в памяти телефона (Внутренний накопитель/AEmulator/<образ>),
+ * Общая папка «карты памяти»: лежит в памяти телефона (Внутренний накопитель/AEmulatorCE/<образ>),
  * гость видит её по своим путям (/mnt/sdcard, /sdcard, /storage/…) — их подменяет qemu (DHD_SDCARD).
  */
 object Sdcard {
@@ -52,7 +52,7 @@ object Sdcard {
         if (previous != null && writable(previous)) return previous
         val tag = "(${img.id})"
         if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
-            val home = File(Environment.getExternalStorageDirectory(), "AEmulator")
+            val home = File(Environment.getExternalStorageDirectory(), FirmwareFolder.HOME)
             runCatching { home.mkdirs() }
             val kept = if (home.isDirectory) home.listFiles()?.firstOrNull { it.isDirectory && it.name.endsWith(tag) } else null
             if (kept != null) return kept

@@ -15,7 +15,7 @@
     <string name="name">Nome</string>
     <string name="save">Salva</string>
     <string name="storage_title">Cartella condivisa dei sistemi</string>
-    <string name="storage_text">Consenti l’accesso a tutti i file: la scheda di memoria di ogni sistema starà nella cartella AEmulator della memoria interna, comoda per APK, musica e foto.</string>
+    <string name="storage_text">Consenti l’accesso a tutti i file: la scheda di memoria di ogni sistema starà nella cartella AEmulatorCE della memoria interna, comoda per APK, musica e foto.</string>
     <string name="allow">Consenti</string>
     <string name="empty_title">Ancora nessun sistema</string>
     <string name="empty_text">Aggiungi un firmware ARM per Android 2.3–6.0: ZIP per recovery, archivio Odin (.tar.md5), system.img o immagine di fabbrica.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">Codice sorgente su GitHub</string>
     <string name="as_copied">Indirizzo copiato</string>
     <string name="as_version">Versione %1$s</string>
-    <string name="as_about">AEmulator esegue firmware Android classici sui telefoni moderni. Gratuito e open source.</string>
+    <string name="as_about">AEmulator CE esegue firmware Android classici sui telefoni moderni. Gratuito e open source.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

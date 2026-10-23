@@ -15,7 +15,7 @@
     <string name="name">Name</string>
     <string name="save">Speichern</string>
     <string name="storage_title">Gemeinsamer Ordner für Systeme</string>
-    <string name="storage_text">Erlaube den Zugriff auf alle Dateien: Dann liegt die Speicherkarte jedes Systems im Ordner AEmulator des internen Speichers – praktisch für APKs, Musik und Fotos.</string>
+    <string name="storage_text">Erlaube den Zugriff auf alle Dateien: Dann liegt die Speicherkarte jedes Systems im Ordner AEmulatorCE des internen Speichers – praktisch für APKs, Musik und Fotos.</string>
     <string name="allow">Erlauben</string>
     <string name="empty_title">Noch keine Systeme</string>
     <string name="empty_text">Füge eine ARM-Firmware für Android 2.3–6.0 hinzu: Recovery-ZIP, Odin-Archiv (.tar.md5), system.img oder Factory-Image.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">Quellcode auf GitHub</string>
     <string name="as_copied">Adresse kopiert</string>
     <string name="as_version">Version %1$s</string>
-    <string name="as_about">AEmulator bringt klassische Android-Firmware auf moderne Handys. Kostenlos und quelloffen.</string>
+    <string name="as_about">AEmulator CE bringt klassische Android-Firmware auf moderne Handys. Kostenlos und quelloffen.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

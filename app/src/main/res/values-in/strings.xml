@@ -15,7 +15,7 @@
     <string name="name">Nama</string>
     <string name="save">Simpan</string>
     <string name="storage_title">Folder bersama untuk sistem</string>
-    <string name="storage_text">Izinkan akses ke semua file: kartu memori tiap sistem akan berada di folder AEmulator penyimpanan internal — praktis untuk APK, musik, dan foto.</string>
+    <string name="storage_text">Izinkan akses ke semua file: kartu memori tiap sistem akan berada di folder AEmulatorCE penyimpanan internal — praktis untuk APK, musik, dan foto.</string>
     <string name="allow">Izinkan</string>
     <string name="empty_title">Belum ada sistem</string>
     <string name="empty_text">Tambahkan firmware ARM Android 2.3–6.0: ZIP recovery, arsip Odin (.tar.md5), system.img, atau factory image.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">Kode sumber di GitHub</string>
     <string name="as_copied">Alamat disalin</string>
     <string name="as_version">Versi %1$s</string>
-    <string name="as_about">AEmulator menjalankan firmware Android klasik di ponsel modern. Gratis dan sumber terbuka.</string>
+    <string name="as_about">AEmulator CE menjalankan firmware Android klasik di ponsel modern. Gratis dan sumber terbuka.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

@@ -15,7 +15,7 @@
     <string name="name">名称</string>
     <string name="save">保存</string>
     <string name="storage_title">系统共享文件夹</string>
-    <string name="storage_text">允许访问所有文件后，每个系统的存储卡都位于内部存储的 AEmulator 文件夹中，方便放入 APK、音乐和照片。</string>
+    <string name="storage_text">允许访问所有文件后，每个系统的存储卡都位于内部存储的 AEmulatorCE 文件夹中，方便放入 APK、音乐和照片。</string>
     <string name="allow">允许</string>
     <string name="empty_title">还没有系统</string>
     <string name="empty_text">添加适用于 Android 2.3–6.0 的 ARM 固件：Recovery 卡刷包、Odin 包（.tar.md5）、system.img 或官方出厂镜像。</string>
@@ -92,7 +92,7 @@
     <string name="as_github">GitHub 源代码</string>
     <string name="as_copied">地址已复制</string>
     <string name="as_version">版本 %1$s</string>
-    <string name="as_about">AEmulator 可在现代手机上运行经典 Android 固件。免费且开源。</string>
+    <string name="as_about">AEmulator CE 可在现代手机上运行经典 Android 固件。免费且开源。</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

@@ -16,7 +16,7 @@
     <string name="name">Name</string>
     <string name="save">Save</string>
     <string name="storage_title">Shared folder for systems</string>
-    <string name="storage_text">Allow access to all files: then each system’s memory card lives in the AEmulator folder of internal storage — handy for APKs, music and photos.</string>
+    <string name="storage_text">Allow access to all files: then each system’s memory card lives in the AEmulatorCECE folder of internal storage — handy for APKs, music and photos.</string>
     <string name="allow">Allow</string>
     <string name="empty_title">No systems yet</string>
     <string name="empty_text">Add an ARM firmware for Android 2.3–6.0: a recovery ZIP, an Odin archive (.tar.md5), system.img or a factory image.</string>
@@ -96,7 +96,7 @@
     <string name="as_github">Source code on GitHub</string>
     <string name="as_copied">Address copied</string>
     <string name="as_version">Version %1$s</string>
-    <string name="as_about">AEmulator runs classic Android firmware on modern phones. Free and open source.</string>
+    <string name="as_about">AEmulator CE runs classic Android firmware on modern phones. Free and open source.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

@@ -15,7 +15,7 @@
     <string name="name">नाम</string>
     <string name="save">सहेजें</string>
     <string name="storage_title">सिस्टम के लिए साझा फ़ोल्डर</string>
-    <string name="storage_text">सभी फ़ाइलों की अनुमति दें: हर सिस्टम का मेमोरी कार्ड आंतरिक स्टोरेज के AEmulator फ़ोल्डर में रहेगा — APK, संगीत और फ़ोटो रखने में आसान।</string>
+    <string name="storage_text">सभी फ़ाइलों की अनुमति दें: हर सिस्टम का मेमोरी कार्ड आंतरिक स्टोरेज के AEmulatorCE फ़ोल्डर में रहेगा — APK, संगीत और फ़ोटो रखने में आसान।</string>
     <string name="allow">अनुमति दें</string>
     <string name="empty_title">अभी कोई सिस्टम नहीं</string>
     <string name="empty_text">Android 2.3–6.0 का ARM फ़र्मवेयर जोड़ें: रिकवरी ZIP, Odin आर्काइव (.tar.md5), system.img या फ़ैक्टरी इमेज।</string>
@@ -92,7 +92,7 @@
     <string name="as_github">GitHub पर सोर्स कोड</string>
     <string name="as_copied">पता कॉपी हुआ</string>
     <string name="as_version">संस्करण %1$s</string>
-    <string name="as_about">AEmulator आधुनिक फ़ोनों पर पुराने Android फ़र्मवेयर चलाता है। मुफ़्त और ओपन सोर्स।</string>
+    <string name="as_about">AEmulator CE आधुनिक फ़ोनों पर पुराने Android फ़र्मवेयर चलाता है। मुफ़्त और ओपन सोर्स।</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>

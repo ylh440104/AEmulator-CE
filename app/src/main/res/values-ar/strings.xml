@@ -15,7 +15,7 @@
     <string name="name">الاسم</string>
     <string name="save">حفظ</string>
     <string name="storage_title">مجلد مشترك للأنظمة</string>
-    <string name="storage_text">اسمح بالوصول إلى كل الملفات: ستكون بطاقة ذاكرة كل نظام في مجلد AEmulator بالذاكرة الداخلية، وهو مناسب لملفات APK والموسيقى والصور.</string>
+    <string name="storage_text">اسمح بالوصول إلى كل الملفات: ستكون بطاقة ذاكرة كل نظام في مجلد AEmulatorCE بالذاكرة الداخلية، وهو مناسب لملفات APK والموسيقى والصور.</string>
     <string name="allow">سماح</string>
     <string name="empty_title">لا توجد أنظمة بعد</string>
     <string name="empty_text">أضف برنامجًا ثابتًا لمعالج ARM لأندرويد 2.3–6.0: ملف ZIP للريكفري، أو أرشيف Odin (.tar.md5)، أو system.img، أو صورة المصنع.</string>
@@ -92,7 +92,7 @@
     <string name="as_github">الشفرة المصدرية على GitHub</string>
     <string name="as_copied">نُسخ العنوان</string>
     <string name="as_version">الإصدار %1$s</string>
-    <string name="as_about">يشغّل AEmulator برامج أندرويد الكلاسيكية على الهواتف الحديثة. مجاني ومفتوح المصدر.</string>
+    <string name="as_about">يشغّل AEmulator CE برامج أندرويد الكلاسيكية على الهواتف الحديثة. مجاني ومفتوح المصدر.</string>
     <string name="log_copy">Copy</string>
     <string name="log_export">Export .log</string>
     <string name="log_copied">Copied to clipboard</string>
