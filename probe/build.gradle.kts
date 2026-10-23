@@ -17,7 +17,7 @@ sourceSets {
         kotlin.srcDirs(rootProject.file("tools/probe"))
         kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer"))
         kotlin {
-            exclude("Importer.kt", "Analyzer.kt", "BootImage.kt", "ErofsImage.kt", "StorageList.kt")
+            exclude("Importer.kt", "Analyzer.kt", "BootImage.kt", "StorageList.kt")
         }
     }
 }

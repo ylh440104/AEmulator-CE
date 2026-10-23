@@ -339,32 +339,67 @@ class Importer(
         }
         if (datBr != null && !gotSystem) {
             val listName = datBr.name.substringBeforeLast("system.new.dat") + "system.transfer.list"
-            val listE = entries.firstOrNull { it.name == listName } ?: throw IOException("system.transfer.list missing")
-            val list = zip.getInputStream(listE).use { String(it.readBytes()) }
+            val listE = entries.firstOrNull { it.name == listName }
             onProgress("Building system.img from OTA", 0.5f)
+            // A block OTA stores a stream that its transfer.list places into the image. A few vendors instead put the
+            // finished file system into the data file and cut it into slices (vivo: 16 pieces of 475 MB, an EROFS
+            // system in them, and a 423 byte list that indexes a different partition). Joining the pieces is then the
+            // whole job, and running the list over it would write 34 blocks into an 8 GB image and lose the rest.
             val raw = File(tmp, "system.raw")
             fatEntryStream(zip, datBr).use { s ->
-                val data = if (datBr.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
-                TransferList.build(list, data, raw)
+                s.copyTo(raw.outputStream().buffered(1 shl 20), 1 shl 20)
             }
-            FileChannel.open(raw.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), "system") }
-            raw.delete()
+            val isWholeImage = FileChannel.open(raw.toPath(), StandardOpenOption.READ).use { c ->
+                val src = ChannelSource(c)
+                ErofsReader.probe(src) || Ext4Reader.probe(src) || SuperImage.probe(src) || SparseSource.probe(src)
+            }
+            if (isWholeImage) {
+                log("${datBr.name.substringAfterLast('/')}: the data file is a whole file system, the transfer.list is not used")
+                FileChannel.open(raw.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), "system") }
+                raw.delete()
+            } else {
+                if (listE == null) { raw.delete(); throw IOException("system.transfer.list missing") }
+                val list = zip.getInputStream(listE).use { String(it.readBytes()) }
+                val img = File(tmp, "system.img")
+                raw.inputStream().buffered(1 shl 20).use { s -> TransferList.build(list, s, img) }
+                raw.delete()
+                FileChannel.open(img.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), "system") }
+                img.delete()
+            }
             // a Treble OTA (8.0+) carries the vendor partition the same way; the firmware's apps and overlays live there.
             // With dynamic partitions (10+) product, system_ext and odm come as their own data files too.
             for (p in listOf("vendor", "product", "system_ext", "odm")) {
                 val pDat = entryNamed(entries, p) ?: continue
-                val pList = entries.firstOrNull { it.name == listName.replace("system.transfer.list", "$p.transfer.list") } ?: continue
+                val pList = entries.firstOrNull { it.name == listName.replace("system.transfer.list", "$p.transfer.list") }
                 runCatching {
                     onProgress("Building $p.img from OTA", 0.8f)
+                    val praw = File(tmp, "$p.raw")
                     fatEntryStream(zip, pDat).use { s ->
                         val data = if (pDat.name.endsWith(".br")) BrotliInputStream(BufferedInputStream(s, 1 shl 20)) else s
-                        TransferList.build(zip.getInputStream(pList).use { String(it.readBytes()) }, data, raw)
+                        data.copyTo(praw.outputStream().buffered(1 shl 20), 1 shl 20)
                     }
-                    FileChannel.open(raw.toPath(), StandardOpenOption.READ).use { c ->
-                        importImage(ChannelSource(c), if (p == "vendor" || p == "odm") p else "system/$p")
+                    val whole = FileChannel.open(praw.toPath(), StandardOpenOption.READ).use { c ->
+                        val src = ChannelSource(c)
+                        ErofsReader.probe(src) || Ext4Reader.probe(src) || SuperImage.probe(src) || SparseSource.probe(src)
+                    }
+                    if (whole) {
+                        log("${pDat.name.substringAfterLast('/')}: a whole file system")
+                        FileChannel.open(praw.toPath(), StandardOpenOption.READ).use { c ->
+                            importImage(ChannelSource(c), if (p == "vendor" || p == "odm") p else "system/$p")
+                        }
+                    } else {
+                        if (pList == null) { log("$p: transfer.list missing, skipped"); praw.delete(); return@runCatching }
+                        val pimg = File(tmp, "$p.img")
+                        praw.inputStream().buffered(1 shl 20).use { s ->
+                            TransferList.build(zip.getInputStream(pList).use { String(it.readBytes()) }, s, pimg)
+                        }
+                        praw.delete()
+                        FileChannel.open(pimg.toPath(), StandardOpenOption.READ).use { c ->
+                            importImage(ChannelSource(c), if (p == "vendor" || p == "odm") p else "system/$p")
+                        }
+                        pimg.delete()
                     }
                 }.onFailure { log("$p partition: ${it.message}") }
-                raw.delete()
             }
         }
         if (sparseChunks.isNotEmpty() && !gotSystem) {

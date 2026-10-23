@@ -66,23 +66,86 @@ private fun probeNewDat(z: ZipFile, work: File, datNames: List<String>) {
     val list = z.getInputStream(listE).use { String(it.readBytes()) }
     val ver = list.lineSequence().firstOrNull()?.trim()
     println("   transfer.list version $ver")
-    val img = File(work, "system.img")
+    val raw = File(work, "system.raw")
+    val joined = File(work, "system.joined")
     val stream = if (parts.size > 1) joinedSlices(z, parts) else z.getInputStream(base ?: parts[0])
-    val t0 = System.currentTimeMillis()
     try {
-        stream.use { s ->
-            val data = if (base?.name?.endsWith(".br") == true) org.brotli.dec.BrotliInputStream(java.io.BufferedInputStream(s, 1 shl 20)) else s
-            TransferList.build(list, data, img)
-        }
+        stream.use { s -> s.copyTo(joined.outputStream().buffered(1 shl 20), 1 shl 20) }
     } catch (e: Throwable) {
-        println("   FAILED: ${e.message ?: e}")
+        println("   joining FAILED: ${e.message ?: e}")
         return
     }
-    println("   system.img = ${img.length() / 1048576} MB in ${(System.currentTimeMillis() - t0) / 1000} s")
+    println("   joined = ${joined.length() / 1048576} MB")
+    val wholeFs = FileChannel.open(joined.toPath(), StandardOpenOption.READ).use { c ->
+        val src = ChannelSource(c)
+        when {
+            ErofsReader.probe(src) -> "EROFS"
+            Ext4Reader.probe(src) -> "ext4"
+            SuperImage.probe(src) -> "super"
+            SparseSource.probe(src) -> "sparse"
+            else -> ""
+        }
+    }
+    println("   joined content: ${if (wholeFs.isEmpty()) "not a file system image" else "$wholeFs image"}")
+    val img: File
+    if (wholeFs.isNotEmpty()) {
+        println("   the data file is the whole image; the transfer.list does not index it")
+        img = joined
+    } else {
+        img = raw
+        val t0 = System.currentTimeMillis()
+        try {
+            joined.inputStream().buffered(1 shl 20).use { s -> TransferList.build(list, s, raw) }
+        } catch (e: Throwable) {
+            println("   TransferList FAILED: ${e.message ?: e}")
+            return
+        }
+        println("   rebuilt via transfer.list = ${raw.length() / 1048576} MB in ${(System.currentTimeMillis() - t0) / 1000} s")
+    }
     FileChannel.open(img.toPath(), StandardOpenOption.READ).use { ch ->
-        val fs = try { Ext4Reader(ChannelSource(ch)) } catch (e: Throwable) { println("   not ext4: ${e.message}"); return }
-        println("   ext4 block ${fs.blockSize}, volume \"${fs.volumeName}\"")
-        readProps(fs, "system")
+        val src = ChannelSource(ch)
+        when {
+            ErofsReader.probe(src) -> {
+                println("   file system: EROFS")
+                val fs = try { ErofsImage(src) } catch (e: Throwable) { println("   EROFS reader failed: ${e.message}"); return }
+                readPropsTree(fs, "system")
+            }
+            Ext4Reader.probe(src) -> {
+                println("   file system: ext4")
+                val fs = Ext4Reader(src)
+                println("   ext4 block ${fs.blockSize}, volume \"${fs.volumeName}\"")
+                readProps(fs, "system")
+            }
+            else -> println("   file system: neither ext4 nor EROFS (the transfer.list did not build a valid image)")
+        }
+    }
+}
+
+private fun readPropsTree(fs: TreeSource, part: String) {
+    val hits = ArrayList<Pair<String, String>>()
+    try {
+        fs.walk { path, node ->
+            val base = path.trimStart('/').substringAfterLast('/')
+            if (node.isFile && base in setOf("build.prop", "prop.default", "default.prop") && node.size in 1..(2L shl 20) && hits.size < 12) {
+                val sb = StringBuilder()
+                try {
+                    fs.copy(node, object : OutputStream() {
+                        override fun write(b: Int) { sb.append(b.toChar()) }
+                        override fun write(b: ByteArray, off: Int, len: Int) { sb.append(String(b, off, len, Charsets.UTF_8)) }
+                    })
+                } catch (e: Throwable) { return@walk }
+                hits.add(path to sb.toString())
+            }
+        }
+    } catch (e: Throwable) {
+        println("   walk of $part stopped: ${e.message}")
+    }
+    if (hits.isEmpty()) { println("   no build.prop found in $part"); return }
+    for ((path, text) in hits) {
+        println("   --- $part:/$path")
+        for (line in text.lineSequence()) {
+            if (line.substringBefore('=', "").trim() in WANTED) println("      ${line.trim()}")
+        }
     }
 }
 
