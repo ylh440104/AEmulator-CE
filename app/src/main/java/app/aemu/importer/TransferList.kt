@@ -12,6 +12,7 @@ import java.io.RandomAccessFile
  */
 object TransferList {
     private const val BLOCK = 4096
+    private const val CHUNK = BLOCK * 256
 
     fun build(list: String, data: InputStream, out: File) {
         val lines = list.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -20,18 +21,31 @@ object TransferList {
         val cmdStart = if (version >= 2) 4 else 2
         RandomAccessFile(out, "rw").use { raf ->
             raf.setLength(totalBlocks * BLOCK)
-            val buf = ByteArray(BLOCK * 256)
+            val buf = ByteArray(CHUNK)
             for (ln in lines.drop(cmdStart)) {
                 val parts = ln.split(' ')
                 when (parts[0]) {
-                    "new" -> for ((a, b) in ranges(parts[1])) {
-                        var blk = a
-                        while (blk < b) {
-                            val n = minOf(256L, b - blk).toInt()
-                            readFully(data, buf, n * BLOCK)
-                            raf.seek(blk * BLOCK)
-                            raf.write(buf, 0, n * BLOCK)
-                            blk += n
+                    // "new <count> <block> <block> ...": <count> blocks are taken from the data, in order, and
+                    // written to the blocks listed after it. The count is a number of blocks, not the start of a
+                    // range: reading it as a range turns "new 2,0,121815" into 121815 blocks and shifts everything.
+                    "new" -> {
+                        val v = parts[1].split(',').map { it.toLong() }
+                        val count = v[0].toInt()
+                        var i = 0
+                        while (i < count) {
+                            val blk = v.getOrNull(i + 1) ?: break
+                            // blocks listed one after another go down in one seek instead of one per block
+                            var run = 1
+                            while (i + run < count && v.getOrNull(i + run + 1) == blk + run) run++
+                            var written = 0
+                            while (written < run) {
+                                val n = minOf(256, run - written)
+                                readFully(data, buf, n * BLOCK)
+                                raf.seek((blk + written) * BLOCK)
+                                raf.write(buf, 0, n * BLOCK)
+                                written += n
+                            }
+                            i += run
                         }
                     }
                     "zero", "erase" -> {} // дыры и так нулевые
@@ -39,14 +53,6 @@ object TransferList {
                 }
             }
         }
-    }
-
-    private fun ranges(s: String): List<Pair<Long, Long>> {
-        val v = s.split(',').map { it.toLong() }
-        val out = ArrayList<Pair<Long, Long>>()
-        var i = 1
-        while (i + 1 < v.size) { out.add(v[i] to v[i + 1]); i += 2 }
-        return out
     }
 
     private fun readFully(i: InputStream, b: ByteArray, n: Int) {
