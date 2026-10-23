@@ -124,17 +124,12 @@ private fun probeNewDat(z: ZipFile, work: File, datNames: List<String>) {
 private fun readPropsTree(fs: TreeSource, part: String) {
     val hits = ArrayList<Pair<String, String>>()
     try {
-        fs.walk { path, node ->
+        fs.walk { path, isDir, link, mode, size, data ->
             val base = path.trimStart('/').substringAfterLast('/')
-            if (node.isFile && base in setOf("build.prop", "prop.default", "default.prop") && node.size in 1..(2L shl 20) && hits.size < 12) {
-                val sb = StringBuilder()
-                try {
-                    fs.copy(node, object : OutputStream() {
-                        override fun write(b: Int) { sb.append(b.toChar()) }
-                        override fun write(b: ByteArray, off: Int, len: Int) { sb.append(String(b, off, len, Charsets.UTF_8)) }
-                    })
-                } catch (e: Throwable) { return@walk }
-                hits.add(path to sb.toString())
+            if (!isDir && link == null && data != null && base in setOf("build.prop", "prop.default", "default.prop")
+                && size in 1..(2L shl 20) && hits.size < 12) {
+                val text = runCatching { data().use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+                if (text != null) hits.add(path to text)
             }
         }
     } catch (e: Throwable) {
