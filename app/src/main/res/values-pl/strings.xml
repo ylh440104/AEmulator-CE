@@ -86,7 +86,6 @@
     <string name="as_defaults_sub">Stosowane do każdego importowanego odtąd firmware</string>
     <string name="as_links">Projekt</string>
     <string name="as_site">Strona</string>
-    <string name="as_channel">Kanał Telegram</string>
     <string name="as_author">Autor</string>
     <string name="as_orig">Pierwotny autor</string>
     <string name="as_orig_sub">Twórca emulatorów Desire HD i One M7, z których wyrósł projekt</string>

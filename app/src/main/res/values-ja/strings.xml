@@ -86,7 +86,6 @@
     <string name="as_defaults_sub">今後インポートするすべてのファームウェアに適用</string>
     <string name="as_links">プロジェクト</string>
     <string name="as_site">ウェブサイト</string>
-    <string name="as_channel">Telegram チャンネル</string>
     <string name="as_author">作者</string>
     <string name="as_orig">オリジナル作者</string>
     <string name="as_orig_sub">本プロジェクトの原点となった Desire HD・One M7 エミュレーターの作者</string>

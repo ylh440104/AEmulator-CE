@@ -89,7 +89,6 @@
     <string name="as_defaults_sub">Применяются к каждой прошивке, которую вы импортируете дальше</string>
     <string name="as_links">Проект</string>
     <string name="as_site">Сайт</string>
-    <string name="as_channel">Telegram-канал</string>
     <string name="as_author">Автор</string>
     <string name="as_orig">Первый автор</string>
     <string name="as_orig_sub">Создатель эмуляторов Desire HD и One M7, из которых вырос проект</string>

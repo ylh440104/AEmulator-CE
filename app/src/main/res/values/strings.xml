@@ -90,7 +90,6 @@
     <string name="as_defaults_sub">Applied to every firmware you import from now on</string>
     <string name="as_links">Project</string>
     <string name="as_site">Project page</string>
-    <string name="as_channel">Builds</string>
     <string name="as_author">Author</string>
     <string name="as_orig">Original project</string>
     <string name="as_orig_sub">The emulator this build is based on</string>
