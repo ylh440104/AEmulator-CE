@@ -13,23 +13,7 @@ object AppPrefs {
     val LANGUAGES = listOf(
         "" to "",
         "en" to "English",
-        "ru" to "Русский",
-        "uk" to "Українська",
-        "de" to "Deutsch",
-        "fr" to "Français",
-        "es" to "Español",
-        "pt-BR" to "Português (Brasil)",
-        "it" to "Italiano",
-        "pl" to "Polski",
-        "tr" to "Türkçe",
-        "ar" to "العربية",
-        "fa" to "فارسی",
-        "hi" to "हिन्दी",
-        "id" to "Bahasa Indonesia",
-        "vi" to "Tiếng Việt",
         "zh-CN" to "简体中文",
-        "ja" to "日本語",
-        "ko" to "한국어",
     )
 
     const val THEME_SYSTEM = 0
