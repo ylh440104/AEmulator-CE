@@ -115,10 +115,7 @@ class Importer(
             h.size > 6 && h[0] == '7'.code.toByte() && h[1] == 'z'.code.toByte() && h[2] == 0xBC.toByte() && h[3] == 0xAF.toByte() -> {
                 if (ch != null) importSevenZ(ch, name, depth) else throw IOException("7z without random access")
             }
-            h.size > 7 && String(h, 0, 6, Charsets.ISO_8859_1) == "Rar!\u001a\u0007" -> {
-                if (h[6].toInt() == 1) throw IOException("RAR5 archives are not supported yet: repack \"$name\" as ZIP or 7z")
-                importRar(src, name, depth)
-            }
+            h.size > 7 && String(h, 0, 6, Charsets.ISO_8859_1) == "Rar!\u001a\u0007" -> importRar(src, name, depth)
             PacFile.probe(h) -> if (ch != null) importPac(src, ch) else throw IOException("pac without random access")
             KdzImage.probe(src) -> importKdz(src)
             PayloadReader.probe(h) -> importPayload(src)
@@ -172,8 +169,8 @@ class Importer(
                     when {
                         n.startsWith("system/") -> { a.getInputStream(fh).use { writeFile(n, it, null) }; gotSystem = true }
                         base.equals("boot.img", true) -> a.getInputStream(fh).use { takeBoot(it.readBytes()) }
-                        base.equals("recovery.img", true) && fh.fullUnpackSize < 64_000_000 -> a.getInputStream(fh).use { recovery = it.readBytes() }
-                        base.matches(SYSTEM_IMAGE) || base.matches(Regex("(?i).*\\.(zip|7z|tar|md5|tgz|gz|xz|pac|ftf|sin)")) && fh.fullUnpackSize > 20_000_000 ->
+                        base.equals("recovery.img", true) && fh.fullUnpackSize < 512_000_000 -> a.getInputStream(fh).use { recovery = it.readBytes() }
+                        base.matches(SYSTEM_IMAGE) || base.matches(Regex("(?i).*\\.(zip|7z|tar|md5|tgz|gz|xz|pac|ftf|sin|kdz|dz|new\\.dat|transfer\\.list)")) && fh.fullUnpackSize > 20_000_000 ->
                             nested.add(a.getInputStream(fh).use { spill(it, base) } to base)
                     }
                     onProgress("Extracting: $base", -1f)
@@ -418,6 +415,8 @@ class Importer(
     private fun importSevenZ(ch: FileChannel, name: String, depth: Int) {
         SevenZFile.builder().setSeekableByteChannel(ch).get().use { z ->
             val nested = ArrayList<Pair<File, String>>()
+            // (a block OTA keeps its data and its transfer.list as separate entries: both have to be in the same
+            // directory for the reader to pair them, so everything that is not a whole image goes to one place)
             while (true) {
                 if (cancelled) throw IOException("cancelled")
                 val e = z.nextEntry ?: break
@@ -429,10 +428,10 @@ class Importer(
                     n.contains("__MACOSX/") || base.startsWith("._") -> {}
                     n.startsWith("system/") -> { writeFile(n, stream, null); gotSystem = true }
                     base.equals("boot.img", true) -> takeBoot(stream.readBytes())
-                    base.equals("recovery.img", true) && e.size < 64_000_000 -> recovery = stream.readBytes()
+                    base.equals("recovery.img", true) && e.size < 512_000_000 -> recovery = stream.readBytes()
                     base.matches(SYSTEM_IMAGE) -> nested.add(spill(stream, base) to "system")
                     base.matches(Regex("(?i)(system|kernel|boot)\\.sin")) -> importSin(stream, base)
-                    base.matches(Regex("(?i).*\\.(zip|tar|tar\\.md5|md5|tgz|tar\\.gz)")) && e.size > 20_000_000 &&
+                    base.matches(Regex("(?i).*\\.(zip|7z|rar|tar|tar\\.md5|md5|tgz|tar\\.gz|pac|ftf|kdz|dz|new\\.dat|transfer\\.list)")) && e.size > 20_000_000 &&
                         !base.startsWith("MODEM") && !base.startsWith("CP_") && !base.contains("CSC") ->
                         nested.add(spill(stream, base) to "archive")
                 }
