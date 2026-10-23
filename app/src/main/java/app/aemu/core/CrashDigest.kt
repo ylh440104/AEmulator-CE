@@ -127,6 +127,8 @@ object CrashDigest {
             if (f.length() > (4L shl 20)) return@forEach
             runCatching { f.copyTo(File(out, "run-${f.name}"), true) }
         }
+        // a crash inside the app itself, when one was recorded
+        runCatching { CrashReport.lastText(ctx)?.let { File(out, "app-crash.txt").writeText(it) } }
         return out
     }
 }

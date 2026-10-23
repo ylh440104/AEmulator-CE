@@ -60,7 +60,11 @@ class AudioOut(
 
     private fun pump() {
         val min = runCatching { AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT) }.getOrDefault(0)
-        val bufSize = maxOf(min * 4, 64 * 1024)
+        // The buffer only has to cover the gap between two writes. Four times the minimum, which is what this used to
+        // ask for, is a third of a second of audio at 48 kHz: every sound then arrives that late, and games feel out of
+        // step with their own picture. Twice the minimum still survives a scheduling hiccup but keeps the delay near
+        // what a phone does natively.
+        val bufSize = maxOf(min * 2, 16 * 1024)
         val buf = ByteArray(4096)
         var track: AudioTrack? = null
         while (!stop) {
