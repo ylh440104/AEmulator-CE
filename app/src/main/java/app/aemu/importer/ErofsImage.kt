@@ -21,7 +21,7 @@ import java.nio.ByteOrder
  * Compressed data is LZ4 (what Android's build uses); with the zero padding feature it is right aligned in its
  * blocks. Directories are blocks of 12-byte entries with the names behind them.
  */
-class ErofsImage(private val src: RandomSource) : TreeSource {
+class ErofsImage(private val src: RandomSource, extraDevices: List<RandomSource> = emptyList()) : TreeSource {
     private val blkBits: Int
     private val blk: Int
     private val metaBase: Long
@@ -47,12 +47,65 @@ class ErofsImage(private val src: RandomSource) : TreeSource {
         val incompat = sb.getInt(80)
         zeroPadding = incompat and 1 != 0
         packedNid = if (incompat and 0x20 != 0) sb.getLong(96) else -1
-        if (incompat and 0x8 != 0 && sb.getShort(86).toInt() != 0) throw IOException("EROFS: an image over several devices")
+        // A build that put the tail of a file system in a second image (system and system_ext, EXT_SLOT) records the
+        // device addresses after the superblock, the primary one last. Addresses below the primary belong to the
+        // images that follow it in [moreDevices]; anything else is this image.
+        if (incompat and 0x8 != 0) {
+            val slots = sb.get(86).toInt() and 0xffff
+            if (slots > 0) readSlots(slots)
+        }
+    }
+
+    /** the images the file system continues into, in the order its device list names them */
+    private var moreDevices: List<RandomSource> = extraDevices
+    private var spans: List<Pair<Long, Long>> = emptyList()
+
+    private fun readSlots(slots: Int) {
+        val addrs = LongArray(slots)
+        var off = 1024L
+        for (i in 0 until slots) {
+            addrs[i] = le(off, 8).getLong(0)
+            off += 8
+        }
+        // (addrs[slots - 1] is the primary; the pairs below it are the ranges the extra images cover)
+        val out = ArrayList<Pair<Long, Long>>()
+        for (k in 1 until slots) out.add(addrs[k - 1] to addrs[k])
+        spans = out
+        if (out.size > moreDevices.size) {
+            throw IOException("EROFS: this file system continues in ${out.size} more image(s), only ${moreDevices.size} were at hand")
+        }
+    }
+
+    /** reads through the device list: a range that belongs to an extra image is read from it */
+    private fun readAt(pos: Long, dst: ByteBuffer) {
+        if (spans.isEmpty() || moreDevices.isEmpty()) { src.read(pos, dst); return }
+        var p = pos
+        while (dst.hasRemaining()) {
+            val idx = spans.indexOfFirst { p >= it.first && p < it.second }
+            val lim = dst.limit()
+            if (idx < 0) {
+                // this address is in the primary: read up to where the next extra range starts
+                val nextStart = spans.map { it.first }.filter { it > p }.minOrNull() ?: Long.MAX_VALUE
+                val can = minOf(dst.remaining().toLong(), nextStart - p).toInt().coerceAtLeast(1)
+                dst.limit(dst.position() + can)
+                src.read(p, dst)
+                dst.limit(lim)
+                p += can
+            } else {
+                val span = spans[idx]
+                val can = minOf(dst.remaining().toLong(), span.second - p).toInt()
+                dst.limit(dst.position() + can)
+                val dev = moreDevices.getOrNull(idx) ?: src
+                dev.read(p - span.first, dst)
+                dst.limit(lim)
+                p += can
+            }
+        }
     }
 
     private fun bytes(pos: Long, n: Int): ByteArray {
         val b = ByteBuffer.allocate(n)
-        src.read(pos, b)
+        readAt(pos, b)
         return b.array()
     }
     private fun le(pos: Long, n: Int): ByteBuffer = ByteBuffer.wrap(bytes(pos, n)).order(ByteOrder.LITTLE_ENDIAN)
@@ -126,7 +179,7 @@ class ErofsImage(private val src: RandomSource) : TreeSource {
             if (part >= parts.size) return -1
             val (pos, size) = parts[part]
             val n = minOf(len.toLong(), size - done).toInt()
-            if (pos < 0) java.util.Arrays.fill(b, off, off + n, 0) else src.read(pos + done, ByteBuffer.wrap(b, off, n))
+            if (pos < 0) java.util.Arrays.fill(b, off, off + n, 0) else readAt(pos + done, ByteBuffer.wrap(b, off, n))
             done += n
             return n
         }

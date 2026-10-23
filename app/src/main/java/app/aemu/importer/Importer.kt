@@ -92,9 +92,11 @@ class Importer(
             log("import: $files files, ${bytes shr 20} MB")
             return ImageStore.get(ctx, id)!!
         } catch (t: Throwable) {
+            closeHeld()
             ImageStore.delete(ctx, id)
             throw t
         } finally {
+            closeHeld()
             tmp.listFiles()?.forEach { it.delete() }
         }
     }
@@ -456,8 +458,9 @@ class Importer(
         }
         val t = spillEntry(zip, e)
         deferred?.let { d -> d.add(t to e.name); return }
+        // (kept until the whole package is done: an EROFS may continue into the image of another partition)
+        partitionFiles.add(t)
         FileChannel.open(t.toPath(), StandardOpenOption.READ).use { c -> block(ChannelSource(c)) }
-        t.delete()
     }
 
     /** a nested zip: its images are copied out first, the zip deleted, then the images unpacked */
@@ -590,9 +593,37 @@ class Importer(
             }
             Yaffs2Image.probe(src) -> importTree(Yaffs2Image(src), mount, "YAFFS2")
             FatImage.probe(src) -> importTree(FatImage(src), mount, "FAT/RFS")
-            ErofsReader.probe(src) -> importTree(ErofsImage(src), mount, "EROFS")
+            ErofsReader.probe(src) -> importTree(ErofsImage(src, extraDeviceSources()), mount, "EROFS")
             else -> throw IOException("unknown file system in the $mount image")
         }
+    }
+
+    /**
+     * The other images of the same package, for an EROFS whose device list points outside itself (a system that was
+     * built together with system_ext and keeps the tail of its file system there). The images already unpacked into
+     * the temp directory are offered in the order they were written; one that does not continue the file system is
+     * never read from.
+     */
+    private fun extraDeviceSources(): List<RandomSource> {
+        val out = ArrayList<RandomSource>()
+        for (f in partitionFiles) {
+            if (!f.isFile || f.length() < 4096) continue
+            runCatching {
+                val ch = FileChannel.open(f.toPath(), StandardOpenOption.READ)
+                heldChannels.add(ch)
+                out.add(ChannelSource(ch))
+            }
+        }
+        return out
+    }
+
+    /** image files of this package kept around while a multi device file system is read */
+    private val partitionFiles = ArrayList<File>()
+    private val heldChannels = ArrayList<FileChannel>()
+
+    private fun closeHeld() {
+        heldChannels.forEach { runCatching { it.close() } }
+        heldChannels.clear()
     }
 
     private fun importTree(tree: TreeSource, mount: String, kind: String) {
