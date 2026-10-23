@@ -100,8 +100,22 @@ object ImageStore {
                         }
                     }
                     android.system.OsConstants.S_ISREG(st.st_mode) -> {
-                        a.inputStream().use { i -> b.outputStream().use { i.copyTo(it, 1 shl 16) } }
-                        runCatching { Os.chmod(b.path, st.st_mode and 0xfff) }
+                        // /data/dalvik-cache holds what the guest compiled ahead of time; a clone may share the parts of it that
+                        // never change instead of copying hundreds of megabytes. The framework's own boot image is the
+                        // bulk of it and is read-only (TreeFixer links it in for the same reason); the files compiled
+                        // per app are not shared, because the guest rewrites those by replacing them on upgrade. What
+                        // stays shared is a cache: a file the guest removes only costs a recompile.
+                        val cached = rel.startsWith("data/dalvik-cache/") &&
+                            (rel.contains("@framework@") || !rel.contains("@")) && !rel.endsWith(".tmp")
+                        val linked = cached && runCatching {
+                            Os.link(a.path, b.path)
+                            Os.chmod(b.path, st.st_mode and 0xfff)
+                            true
+                        }.getOrDefault(false)
+                        if (!linked) {
+                            a.inputStream().use { i -> b.outputStream().use { i.copyTo(it, 1 shl 16) } }
+                            runCatching { Os.chmod(b.path, st.st_mode and 0xfff) }
+                        }
                     }
                 }
             }
