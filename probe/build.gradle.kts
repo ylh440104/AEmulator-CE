@@ -14,7 +14,8 @@ kotlin {
 
 sourceSets {
     main {
-        kotlin.srcDirs(rootProject.file("tools/probe"))
+        kotlin.srcDir(rootProject.file("tools/probe/ImportProbe.kt"))
+        kotlin.srcDir(rootProject.file("tools/probe/HuaweiProbe.kt"))
         kotlin.srcDir(rootProject.file("app/src/main/java/app/aemu/importer"))
         kotlin {
             exclude("Importer.kt", "Analyzer.kt", "BootImage.kt", "StorageList.kt")
@@ -34,6 +35,17 @@ application {
 
 tasks.named<JavaExec>("run") {
     maxHeapSize = "3g"
+    systemProperty("file.encoding", "UTF-8")
+    args = (project.findProperty("firmware")?.toString()?.let { listOf(it) } ?: emptyList()) +
+        listOf(project.findProperty("work")?.toString() ?: "build/probe-work")
+}
+
+tasks.register<JavaExec>("probeHuawei") {
+    group = "verification"
+    mainClass.set("HuaweiProbeKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    maxHeapSize = "3g"
+    systemProperty("file.encoding", "UTF-8")
     args = (project.findProperty("firmware")?.toString()?.let { listOf(it) } ?: emptyList()) +
         listOf(project.findProperty("work")?.toString() ?: "build/probe-work")
 }

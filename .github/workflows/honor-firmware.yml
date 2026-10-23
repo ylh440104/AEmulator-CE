@@ -1,0 +1,145 @@
+name: Honor firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Firmware URL. Empty: the Honor AAK-AN00 MagicOS 10 package.'
+        required: false
+        default: ''
+      mode:
+        description: 'What to do: sections (list UPDATE.APP sections) or import (full import)'
+        type: choice
+        options: [sections, import]
+        default: sections
+
+env:
+  DEFAULT_URL: 'https://iknow.service.hihonor.com/weknow/servlet/download/public?contextNo=W00065867'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost /usr/share/swift || true
+          df -h / | tail -1
+
+      - name: Cache the inner package
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: honor-update-sd-${{ github.event.inputs.url || 'aak-an00' }}-v1
+
+      - name: Fetch the outer archive and the inner one
+        run: |
+          set -euo pipefail
+          mkdir -p cache fw
+          URL="${{ github.event.inputs.url }}"
+          [ -n "$URL" ] || URL="$DEFAULT_URL"
+
+          OUTER=cache/outer.zip
+          if [ -s "$OUTER" ]; then
+            echo "outer archive already cached: $(du -h $OUTER | cut -f1)"
+          else
+            echo "downloading the outer archive"
+            curl -fL --retry 4 --retry-delay 5 --retry-all-errors --max-time 3600 \
+              -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36' \
+              -c cookies.txt -b cookies.txt -o "$OUTER" "$URL"
+            du -h "$OUTER"
+          fi
+
+          echo "extracting Software/dload/update_sd_base.zip"
+          python3 - <<'PY'
+          import zipfile, os, shutil, sys
+          src = 'cache/outer.zip'
+          z = zipfile.ZipFile(src)
+          names = [n for n in z.namelist() if n.endswith('update_sd_base.zip')]
+          if not names:
+              print('no update_sd_base.zip; entries:', z.namelist()[:20]); sys.exit(1)
+          n = names[0]
+          info = z.getinfo(n)
+          dst = 'cache/update_sd_base.zip'
+          if os.path.exists(dst) and os.path.getsize(dst) == info.file_size:
+              print('inner already extracted:', dst, info.file_size)
+          else:
+              print('extracting', n, info.file_size, 'bytes')
+              with z.open(n) as i, open(dst, 'wb') as o:
+                  shutil.copyfileobj(i, o, 1 << 20)
+          print('inner:', os.path.getsize(dst))
+          PY
+
+          echo "listing the inner archive"
+          python3 - <<'PY'
+          import zipfile
+          z = zipfile.ZipFile('cache/update_sd_base.zip')
+          for i in z.infolist():
+              print('%12d  %s' % (i.file_size, i.filename))
+          PY
+
+          df -h / | tail -1
+
+      - name: Extract UPDATE.APP
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile, os, shutil
+          z = zipfile.ZipFile('cache/update_sd_base.zip')
+          names = [n for n in z.namelist() if n.upper().endswith('UPDATE.APP')]
+          print('candidates:', names)
+          if not names: raise SystemExit('no UPDATE.APP inside')
+          n = names[0]
+          info = z.getinfo(n)
+          dst = 'fw/UPDATE.APP'
+          if os.path.exists(dst) and os.path.getsize(dst) == info.file_size:
+              print('already extracted')
+          else:
+              print('extracting', n, info.file_size)
+              with z.open(n) as i, open(dst, 'wb') as o:
+                  shutil.copyfileobj(i, o, 1 << 20)
+          print('UPDATE.APP:', os.path.getsize(dst))
+          PY
+          df -h / | tail -1
+
+      - name: Sections of UPDATE.APP
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :probe:probeHuawei \
+            -Pfirmware="$(pwd)/fw/UPDATE.APP" \
+            -Pwork="$(pwd)/fw/work" 2>&1 | tee probe.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Honor AAK-AN00 UPDATE.APP"
+            echo ""
+            echo '```'
+            grep -E '^(==|  \[|   \[|      )' probe.log | head -150 || echo "no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: honor-probe-log
+          path: probe.log
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: honor-sections
+          path: |
+            fw/work/sec*.bin
+          if-no-files-found: warn
+          retention-days: 7
