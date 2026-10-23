@@ -36,6 +36,10 @@ class ErofsImage(private val src: RandomSource, extraDevices: List<RandomSource>
         var fragment = false
     }
 
+    /** the images the file system continues into, in the order its device list names them */
+    private var moreDevices: List<RandomSource> = extraDevices
+    private var spans: List<Pair<Long, Long>> = emptyList()
+
     init {
         val sb = le(1024, 128)
         if (sb.getInt(0) != MAGIC) throw IOException("not an EROFS image")
@@ -55,10 +59,6 @@ class ErofsImage(private val src: RandomSource, extraDevices: List<RandomSource>
             if (slots > 0) readSlots(slots)
         }
     }
-
-    /** the images the file system continues into, in the order its device list names them */
-    private var moreDevices: List<RandomSource> = extraDevices
-    private var spans: List<Pair<Long, Long>> = emptyList()
 
     private fun readSlots(slots: Int) {
         val addrs = LongArray(slots)

@@ -86,12 +86,12 @@ import app.aemu.R
 
 /** Ссылки проекта — одни и те же в приложении, README и на сайте. */
 object Links {
-    const val SITE = "https://aemulator.gt.tc"
-    const val GITHUB = "https://github.com/uxazu/aemulator"
-    const val CHANNEL = "https://t.me/aemulatorofficial"
-    const val AUTHOR = "https://github.com/uxazu"
-    const val ORIGINAL = "https://t.me/istratii_tech1"
-    const val DONATE = "https://dalink.to/uxazu"
+    const val SITE = "https://github.com/ylh440104/AEmulator-Plus"
+    const val GITHUB = "https://github.com/ylh440104/AEmulator-Plus"
+    const val CHANNEL = "https://github.com/ylh440104/AEmulator-Plus"
+    const val AUTHOR = "https://github.com/ylh440104"
+    const val ORIGINAL = "https://github.com/uxazu/AEmulator"
+    const val DONATE = "https://github.com/ylh440104"
 }
 
 class AppSettingsActivity : ComponentActivity() {
@@ -253,22 +253,20 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
 
             item {
                 Section(stringResource(R.string.as_links)) {
-                    Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "aemulator.gt.tc") { open(Links.SITE) }
-                    Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "@aemulatorofficial") { open(Links.CHANNEL) }
-                    Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "uxazu") { open(Links.AUTHOR) }
-                    Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "t.me/istratii_tech1") { open(Links.ORIGINAL) }
-                    Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/uxazu/aemulator") { open(Links.GITHUB) }
+                    Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "github.com/ylh440104/AEmulator-Plus") { open(Links.SITE) }
+                    Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "github.com/ylh440104/AEmulator-Plus") { open(Links.CHANNEL) }
+                    Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "ylh440104") { open(Links.AUTHOR) }
+                    Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "github.com/uxazu/AEmulator") { open(Links.ORIGINAL) }
+                    Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/ylh440104/AEmulator-Plus") { open(Links.GITHUB) }
                 }
             }
-
             item {
                 Section(stringResource(R.string.as_support)) {
-                    Row_(Icons.Rounded.Favorite, stringResource(R.string.as_donate), "dalink.to/uxazu") { open(Links.DONATE) }
+                    Row_(Icons.Rounded.Favorite, stringResource(R.string.as_donate), "github.com/ylh440104") { open(Links.DONATE) }
                 }
             }
         }
     }
-
     if (langDialog) {
         AlertDialog(
             onDismissRequest = { langDialog = false },
