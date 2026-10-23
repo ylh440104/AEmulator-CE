@@ -80,9 +80,9 @@ import app.aemu.R
 
 /** Ссылки проекта — одни и те же в приложении, README и на сайте. */
 object Links {
-    const val SITE = "https://github.com/ylh440104/AEmulator-Plus"
-    const val GITHUB = "https://github.com/ylh440104/AEmulator-Plus"
-    const val CHANNEL = "https://github.com/ylh440104/AEmulator-Plus"
+    const val SITE = "https://github.com/ylh440104/AEmulator-CE"
+    const val GITHUB = "https://github.com/ylh440104/AEmulator-CE"
+    const val CHANNEL = "https://github.com/ylh440104/AEmulator-CE"
     const val AUTHOR = "https://github.com/ylh440104"
     const val ORIGINAL = "https://github.com/uxazu/AEmulator"
 }
@@ -195,11 +195,11 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
 
             item {
                 Section(stringResource(R.string.as_links)) {
-                    Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "github.com/ylh440104/AEmulator-Plus") { open(Links.SITE) }
-                    Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "github.com/ylh440104/AEmulator-Plus") { open(Links.CHANNEL) }
+                    Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "github.com/ylh440104/AEmulator-CE") { open(Links.SITE) }
+                    Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "github.com/ylh440104/AEmulator-CE") { open(Links.CHANNEL) }
                     Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "ylh440104") { open(Links.AUTHOR) }
                     Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "github.com/uxazu/AEmulator") { open(Links.ORIGINAL) }
-                    Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/ylh440104/AEmulator-Plus") { open(Links.GITHUB) }
+                    Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/ylh440104/AEmulator-CE") { open(Links.GITHUB) }
                 }
             }
         }

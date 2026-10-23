@@ -1,4 +1,4 @@
-# AEmulator Plus
+# AEmulator CE
 
 在 Android 手机上运行其他 Android 固件。
 
@@ -23,13 +23,13 @@
 
 ## 安装
 
-从 [Releases](https://github.com/ylh440104/AEmulator-Plus/releases) 下载 APK 安装，或使用 GitHub Actions 自动构建的产物。
+从 [Releases](https://github.com/ylh440104/AEmulator-CE/releases) 下载 APK 安装，或使用 GitHub Actions 自动构建的产物。
 
 ## 构建
 
 ```bash
-git clone https://github.com/ylh440104/AEmulator-Plus.git
-cd AEmulator-Plus
+git clone https://github.com/ylh440104/AEmulator-CE.git
+cd AEmulator-CE
 ./gradlew assembleStandardDebug
 ```
 

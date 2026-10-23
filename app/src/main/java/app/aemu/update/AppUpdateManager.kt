@@ -37,8 +37,8 @@ sealed interface UpdateState {
 }
 
 object AppUpdateManager {
-    private const val RELEASES_API = "https://api.github.com/repos/ylh440104/AEmulator-Plus/releases"
-    private const val GITHUB_REPO_URL = "https://github.com/ylh440104/AEmulator-Plus"
+    private const val RELEASES_API = "https://api.github.com/repos/ylh440104/AEmulator-CE/releases"
+    private const val GITHUB_REPO_URL = "https://github.com/ylh440104/AEmulator-CE"
 
     /** the file the release publishes for this package (BuildConfig.APPLICATION_ID, "app.aemu" or its flavors) */
     private val expectedApk: String get() = "${BuildConfig.APPLICATION_ID}.apk"
