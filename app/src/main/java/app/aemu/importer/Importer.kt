@@ -717,9 +717,17 @@ class Importer(
     /** A full A/B OTA: every partition with files of the firmware is taken out of payload.bin in turn and read. */
     private fun importPayload(src: RandomSource) {
         log("OTA payload.bin")
-        val extra = PayloadReader.partitionNames(src).map { it.removeSuffix("_a") }.filter { it.matches(SKIN_PARTITION) }.distinct()
-        for ((part, mount) in listOf("system" to "system", "vendor" to "vendor", "odm" to "odm",
-                "product" to "system/product", "system_ext" to "system/system_ext") + extra.map { it to it }) {
+        // (the vendor partitions of a skin are part of the system tree: my_stock of OPPO is 3.6 GB of it, so they
+        // are taken beside system, before the small fixed ones)
+        val skin = PayloadReader.partitionNames(src).map { it.removeSuffix("_a") }
+            .filter { it.matches(SKIN_PARTITION) }.distinct()
+            .sortedByDescending { n ->
+                // largest first: an aborted import then fails late, not after the important partitions
+                runCatching { PayloadReader.partitionSize(src, n) }.getOrDefault(0L)
+            }
+        for ((part, mount) in listOf("system" to "system") +
+            skin.map { it to it } +
+            listOf("vendor" to "vendor", "odm" to "odm", "product" to "system/product", "system_ext" to "system/system_ext")) {
             val img = File(tmp, "${System.nanoTime()}-$part.img")
             try {
                 val ok = PayloadReader.extractPartition(src, part, img) { p -> onProgress("Extracting $part from payload.bin", p) }

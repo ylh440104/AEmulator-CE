@@ -597,6 +597,12 @@ object PayloadReader {
     /** names of every partition the payload carries (slot suffix as written) */
     fun partitionNames(src: RandomSource): List<String> = manifest(src)?.first?.map { it.name } ?: emptyList()
 
+    /** how large the partition is once written out, or 0 when the payload does not carry it */
+    fun partitionSize(src: RandomSource, partName: String): Long {
+        val (partitions, _) = manifest(src) ?: return 0
+        return partitions.firstOrNull { it.name.equals(partName, true) || it.name.equals("${partName}_a", true) }?.size ?: 0
+    }
+
     fun extractPartition(src: RandomSource, partName: String, outFile: File, progress: (Float) -> Unit = {}): Boolean {
         val (partitions, dataOffsetBase) = manifest(src) ?: return false
         val target = partitions.firstOrNull { it.name.equals(partName, true) || it.name.equals("${partName}_a", true) } ?: return false
