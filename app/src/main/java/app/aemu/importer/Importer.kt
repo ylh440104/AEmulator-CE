@@ -120,6 +120,7 @@ class Importer(
                 importRar(src, name, depth)
             }
             PacFile.probe(h) -> if (ch != null) importPac(src, ch) else throw IOException("pac without random access")
+            KdzImage.probe(src) -> importKdz(src)
             PayloadReader.probe(h) -> importPayload(src)
             SinImage.probe(h) || SinImage.probeOld(h) && name.endsWith(".sin", true) -> importSin(streamOf(src), name.substringAfterLast('/'))
             SparseSource.probe(src) || Ext4Reader.probe(src) || SuperImage.probe(src) || ErofsReader.probe(src) -> importImage(src, "system")
@@ -288,7 +289,8 @@ class Importer(
         if (wrap.isNotEmpty()) log("archive with wrapper folder \"${wrap.trimEnd('/')}\"")
         val names = entries.map { it.name.removePrefix(wrap) }.toSet()
         val datBr = entryNamed(entries, "system")
-        val sparseChunks = entries.filter { it.name.matches(Regex("(.*/)?system\\.img_sparsechunk\\.\\d+")) }.sortedBy { it.name.substringAfterLast('.').toInt() }
+        val sparseChunks = entries.filter { it.name.matches(Regex("(?i)(.*/)?system\\.img(_sparsechunk)?[._]\\d+")) }
+            .sortedBy { it.name.substringAfterLast('.').let { n -> n.filter { c -> c.isDigit() }.toIntOrNull() ?: 0 } }
         // vendor firmware keeps the images a recovery would flash under firmware-update/ (vivo, OPPO, Xiaomi's
         // super images), out of reach of the rules below, which look at the entry's own name
         val fwDir = entries.firstOrNull { e -> !e.isDirectory && e.name.contains("firmware-update/") }
@@ -624,6 +626,26 @@ class Importer(
     private fun closeHeld() {
         heldChannels.forEach { runCatching { it.close() } }
         heldChannels.clear()
+    }
+
+    private fun importKdz(src: RandomSource) {
+        val layout = KdzImage.layout(src)
+        log("kdz: ${layout.parts.size} partitions (${layout.extraChunks} extra chunks)")
+        for (p in layout.parts) {
+            val base = p.name.substringAfterLast('/').substringBefore('.').lowercase()
+            val mount = when {
+                base.startsWith("system") -> "system"
+                base.startsWith("vendor") -> "vendor"
+                else -> continue
+            }
+            onProgress("Unpacking ${p.name}", -1f)
+            val out = File(tmp, "${System.nanoTime()}-$base.img")
+            runCatching {
+                KdzImage.extract(src, p, out)
+                FileChannel.open(out.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), mount) }
+            }.onFailure { log("kdz ${p.name}: ${it.message}") }
+            out.delete()
+        }
     }
 
     private fun importTree(tree: TreeSource, mount: String, kind: String) {
