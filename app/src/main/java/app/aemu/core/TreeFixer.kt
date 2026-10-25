@@ -1412,8 +1412,16 @@ class TreeFixer(
     private fun makeSysNodes() {
         val freq = File(root, "sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
         if (!freq.isFile) {
+            // the guest reads its top clock from here and reports it in its own settings: a table of one made-up
+            // 1.5 GHz made every phone look slower than it is, and the user had no way to tell. The host's real
+            // table is used when it can be read (it names the big cores too), with the old one as the fallback.
+            val hostTable = runCatching {
+                java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state").readLines()
+                    .mapNotNull { it.trim().substringBefore(' ').toLongOrNull() }.filter { it > 0 }
+            }.getOrDefault(emptyList())
+            val table = if (hostTable.isNotEmpty()) hostTable else listOf(384000L, 594000L, 810000L, 1026000L, 1242000L, 1512000L)
             freq.parentFile?.mkdirs()
-            freq.writeText(listOf(384000, 594000, 810000, 1026000, 1242000, 1512000).joinToString("\n") { "$it 0" } + "\n")
+            freq.writeText(table.joinToString("\n") { "$it 0" } + "\n")
         }
         val cpus = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
         val cpu = File(root, "sys/devices/system/cpu").apply { mkdirs() }
@@ -1457,6 +1465,21 @@ class TreeFixer(
             "usb/type" to "USB", "usb/online" to "0",
         )
         for ((rel, v) in bat) File(base, rel).let { if (!it.isFile) { it.parentFile?.mkdirs(); it.writeText(v + "\n") } }
+        // The battery dialog writes through dumpsys/healthd, and a level the guest set before it was shut down
+        // (0%: the system powered itself off) survives the shutdown in these files. Booted that way the guest
+        // powers off again on its own — the machine is locked until its data is wiped. A dead or empty battery
+        // has no meaning inside an emulator anyway, so every boot starts from a full, charging one.
+        runCatching {
+            File(base, "battery/capacity").takeIf { it.isFile }?.let { f ->
+                f.readText().trim().toIntOrNull()?.let { lvl -> if (lvl < 15) f.writeText("100\n") }
+            }
+            File(base, "battery/status").takeIf { it.isFile }?.let { f ->
+                val s = f.readText().trim()
+                if (s.equals("Dead", true) || s.equals("Discharging", true) || s.equals("Not charging", true))
+                    f.writeText("Full\n")
+            }
+            File(base, "ac/online").takeIf { it.isFile }?.let { f -> if (f.readText().trim() != "1") f.writeText("1\n") }
+        }
         healthdRelativeSysfs(base)
         personalityNoop()
         parkNfc()
