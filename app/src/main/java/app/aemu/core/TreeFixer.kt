@@ -1411,14 +1411,16 @@ class TreeFixer(
 
     private fun makeSysNodes() {
         val freq = File(root, "sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state")
-        if (!freq.isFile) {
-            // the guest reads its top clock from here and reports it in its own settings: a table of one made-up
-            // 1.5 GHz made every phone look slower than it is, and the user had no way to tell. The host's real
-            // table is used when it can be read (it names the big cores too), with the old one as the fallback.
-            val hostTable = runCatching {
-                java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state").readLines()
-                    .mapNotNull { it.trim().substringBefore(' ').toLongOrNull() }.filter { it > 0 }
-            }.getOrDefault(emptyList())
+        // the guest reads its top clock from here and reports it in its own settings: a table of one made-up
+        // 1.5 GHz made every phone look slower than it is, and the user had no way to tell. The file is ours
+        // (no firmware ships a sys tree), so it is refreshed with the host's real table whenever that can be
+        // read — images imported by an older version keep their stale table otherwise. The old one stays the
+        // fallback for a host that exposes nothing.
+        val hostTable = runCatching {
+            java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state").readLines()
+                .mapNotNull { it.trim().substringBefore(' ').toLongOrNull() }.filter { it > 0 }
+        }.getOrDefault(emptyList())
+        if (!freq.isFile || hostTable.isNotEmpty()) {
             val table = if (hostTable.isNotEmpty()) hostTable else listOf(384000L, 594000L, 810000L, 1026000L, 1242000L, 1512000L)
             freq.parentFile?.mkdirs()
             freq.writeText(table.joinToString("\n") { "$it 0" } + "\n")
