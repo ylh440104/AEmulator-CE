@@ -706,6 +706,9 @@ class VmActivity : ComponentActivity() {
             val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
             fun clamp(o: Offset) = Offset(if (rtl) o.x.coerceIn(0f, maxX) else o.x.coerceIn(-maxX, 0f), o.y.coerceIn(0f, maxY))
             LaunchedEffect(maxX, maxY) { menuOffset = clamp(menuOffset) }
+            // a stored offset from a bigger screen (or a rotation) is clamped here at draw time as well: writing it
+            // back during composition would loop, but the drawn position is always kept on screen no matter what
+            val drawn = clamp(menuOffset)
             led?.takeIf { it.lit && showLed }?.let { LedIndicator(it, Modifier.align(Alignment.TopCenter)) }
             // карточка загрузки
             AnimatedVisibility(
@@ -735,7 +738,7 @@ class VmActivity : ComponentActivity() {
 
             // top menu button (hidden while the log is open so it does not cover the log toolbar); drag to move it
             if (!showLog && !showTerm) Box(Modifier.align(Alignment.TopEnd).displayCutoutPadding().statusBarsPadding().padding(8.dp)
-                .offset { IntOffset(menuOffset.x.roundToInt(), menuOffset.y.roundToInt()) }
+                .offset { IntOffset(drawn.x.roundToInt(), drawn.y.roundToInt()) }
                 .pointerInput(Unit) {
                     detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset = clamp(menuOffset + d) }
                 }) {

@@ -65,7 +65,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
                 if (img != raw) ImageStore.save(ctx, img)
                 _import.value = _import.value.copy(active = false, done = img, step = "Done", progress = 1f)
             } catch (t: Throwable) {
-                _import.value = _import.value.copy(active = false, error = t.message ?: t.toString())
+                _import.value = _import.value.copy(active = false, error = readableError(t.message ?: t.toString()))
             } finally {
                 importer = null
                 refresh()
@@ -83,12 +83,31 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
                 val img = ImageStore.clone(ctx, src, name, copyData, customSettings, { cloneCancelled }) { s -> _import.value = _import.value.copy(step = "Copying $s") }
                 _import.value = _import.value.copy(active = false, done = img, step = "Done", progress = 1f)
             } catch (t: Throwable) {
-                _import.value = _import.value.copy(active = false, error = t.message ?: t.toString())
+                _import.value = _import.value.copy(active = false, error = readableError(t.message ?: t.toString()))
             } finally { refresh() }
         }
     }
 
     fun cancelImport() { importer?.cancelled = true; cloneCancelled = true }
+
+    /** a message the user can act on: the raw text a decompressor or file system throws is its own jargon */
+    private fun readableError(raw: String): String {
+        val r = raw.trim()
+        return when {
+            r.contains("invalid stored block lengths", true) || r.contains("incorrect header check", true) ||
+                r.contains("invalid distance too far back", true) || r.contains("invalid code lengths set", true) ->
+                "the file's compressed data is damaged or truncated — download it again (the archive fails to decompress: $r)"
+            r.contains("not enough space", true) ->
+                r
+            r.contains("no Android system partition", true) ->
+                "no Android system partition found: this file is not a firmware image, or its layout is one this version cannot read"
+            r.contains("unknown file format", true) ->
+                r
+            r.startsWith("file failed to open") ->
+                r
+            else -> r
+        }
+    }
 
     /** A machine is running (they live in the :vm process); its files must not be changed under it. */
     fun vmRunning(): Boolean {

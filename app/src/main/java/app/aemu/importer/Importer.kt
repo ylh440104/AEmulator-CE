@@ -117,6 +117,8 @@ class Importer(
             }
             h.size > 7 && String(h, 0, 6, Charsets.ISO_8859_1) == "Rar!\u001a\u0007" -> importRar(src, name, depth)
             PacFile.probe(h) -> if (ch != null) importPac(src, ch) else throw IOException("pac without random access")
+            KdzImage.probeKdz2(src) -> importKdz2(src)
+            KdzImage.probeDz2(src) -> importDz2(src)
             KdzImage.probe(src) -> importKdz(src)
             PayloadReader.probe(h) -> importPayload(src)
             SinImage.probe(h) || SinImage.probeOld(h) && name.endsWith(".sin", true) -> importSin(streamOf(src), name.substringAfterLast('/'))
@@ -644,6 +646,32 @@ class Importer(
                 FileChannel.open(out.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), mount) }
             }.onFailure { log("kdz ${p.name}: ${it.message}") }
             out.delete()
+        }
+    }
+    /** the newer LG kdz (v1/v2/v3): the container points at a dz, the dz holds the partitions in chunks */
+    private fun importKdz2(src: RandomSource) {
+        val (dz, dzName) = KdzImage.dzOfKdz2(src) ?: throw IOException("kdz: no dz record in the container")
+        log("kdz: $dzName")
+        importDz2(dz)
+    }
+    /** the newer LG dz: chunk headers with sectors, the data zlib compressed */
+    private fun importDz2(src: RandomSource) {
+        val chunks = KdzImage.dz2Chunks(src)
+        val parts = chunks.map { it.part }.distinct()
+        log("dz: ${chunks.size} chunks over ${parts.size} partitions: ${parts.joinToString().take(200)}")
+        val files = KdzImage.extractDz2(src, chunks, setOf("system", "vendor"), tmp) { p -> onProgress("Unpacking $p", -1f) }
+        for (f in files) {
+            val base = f.name.substringBefore('.').lowercase()
+            val mount = when {
+                base.startsWith("system") -> "system"
+                base.startsWith("vendor") -> "vendor"
+                else -> continue
+            }
+            onProgress("Importing ${f.name}", -1f)
+            runCatching {
+                FileChannel.open(f.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), mount) }
+            }.onFailure { log("dz ${f.name}: ${it.message}") }
+            f.delete()
         }
     }
 
