@@ -208,4 +208,11 @@
     <string name="m_vnc">启动 VNC 服务器</string>
     <string name="m_vnc_stop">停止 VNC 服务器</string>
     <string name="m_vnc_started">VNC：%1$s，密码 %2$s</string>
+    <string name="exec_choice_title">这个系统怎么运行？</string>
+    <string name="exec_choice_text">"%1$s"（%2$s）是 32 位固件。你的手机可以让它直接在 CPU 上原生运行（快得多），也可以走 QEMU 转译（慢一些但兼容性好，适合调用老内核接口的固件）。以后可以在系统设置里改。</string>
+    <string name="exec_choice_native">原生（快）</string>
+    <string name="exec_choice_native_sub">AArch32 直通执行</string>
+    <string name="exec_choice_translator">转译（稳）</string>
+    <string name="exec_choice_translator_sub">QEMU 指令翻译</string>
+    <string name="exec_choice_ask_later">稍后再说</string>
 </resources>

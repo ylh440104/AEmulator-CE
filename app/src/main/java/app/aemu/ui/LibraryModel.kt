@@ -119,6 +119,18 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
     }
     fun dismissImport() { _import.value = ImportState() }
 
+    /** the execution the user picked for a 32-bit firmware right after the import: native AArch32, or the translator */
+    fun applyExecution(img: GuestImage, native: Boolean) {
+        val ctx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                ImageStore.save(ctx, img.copy(settings = img.settings.copy(native32 = native)))
+            }
+            refresh()
+            _import.value = _import.value.copy(done = null)
+        }
+    }
+
     fun delete(img: GuestImage) {
         viewModelScope.launch(Dispatchers.IO) {
             ImageStore.delete(getApplication(), img.id)

@@ -209,4 +209,11 @@
     <string name="m_vnc_started">VNC: %1$s, password %2$s</string>
     <string name="as_led">Notification light</string>
     <string name="as_led_sub">Show the guest phone’s LED above its screen</string>
+    <string name="exec_choice_title">How should this system run?</string>
+    <string name="exec_choice_text">"%1$s" (%2$s) is a 32-bit firmware. Your phone can run it natively on the CPU, which is much faster, or through the QEMU translator, which is slower but safer with old system calls. You can change this later in the system settings.</string>
+    <string name="exec_choice_native">Native (fast)</string>
+    <string name="exec_choice_native_sub">Direct AArch32 execution</string>
+    <string name="exec_choice_translator">Translator (safe)</string>
+    <string name="exec_choice_translator_sub">QEMU translation</string>
+    <string name="exec_choice_ask_later">Decide later</string>
 </resources>

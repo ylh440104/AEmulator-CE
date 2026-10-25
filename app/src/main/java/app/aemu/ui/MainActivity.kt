@@ -62,6 +62,7 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -297,6 +298,18 @@ AlertDialog(
         )
     }
     if (help) HelpDialog(onDismiss = { help = false })
+    // a 32-bit firmware was just imported: the phone may run it natively (AArch32 EL0) or through the translator.
+    // The translator is the safer default the importer set; this asks once, right after the import.
+    val done32 = imp.done?.takeIf { !it.abi.startsWith("arm64") && app.aemu.core.CpuInfo.hasAArch32 }
+    if (done32 != null) ExecutionChoiceDialog(
+        name = done32.name,
+        version = done32.displayVersion,
+        onDismiss = { model.dismissImport() },
+        onNative = {
+            model.applyExecution(done32, native = true)
+        },
+        onTranslator = { model.dismissImport() },
+    )
     if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
         onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
         onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
@@ -556,8 +569,41 @@ private fun HelpDialog(onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(stringResource(R.string.help_text))
-            }
+}
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
+    )
+}
+@Composable
+private fun ExecutionChoiceDialog(name: String, version: String, onDismiss: () -> Unit, onNative: () -> Unit, onTranslator: () -> Unit) {
+    // A 32-bit firmware can run two ways on a phone that still has AArch32: native execution, which is much faster
+    // but leaves the guest face to face with the host kernel (a few firmwares call interfaces the kernel refuses),
+    // and the translator, which is slower but rounds those calls off. The importer set the translator; this lets the
+    // user decide with one tap, right after the import.
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.exec_choice_title)) },
+        text = {
+            Column {
+                Text(stringResource(R.string.exec_choice_text, name, version), style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(14.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onNative, modifier = Modifier.weight(1f)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(R.string.exec_choice_native), style = MaterialTheme.typography.titleSmall)
+                            Text(stringResource(R.string.exec_choice_native_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    OutlinedButton(onClick = onTranslator, modifier = Modifier.weight(1f)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(R.string.exec_choice_translator), style = MaterialTheme.typography.titleSmall)
+                            Text(stringResource(R.string.exec_choice_translator_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.exec_choice_ask_later)) } },
     )
 }
