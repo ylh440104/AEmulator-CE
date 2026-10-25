@@ -43,7 +43,7 @@ object KdzImage {
         val b = ByteBuffer.allocate(4)
         src.read(0, b); b.flip()
         val m = ByteArray(4).also { b.get(it) }
-        return m.contentEquals(byteArrayOf(0x32, 0x96, 0x18, 0x74))
+        return m.contentEquals(byteArrayOf(0x32.toByte(), 0x96.toByte(), 0x18.toByte(), 0x74.toByte()))
     }
     /** the kdz container of v1/v2/v3: magic 0x50447932, 0x80253134 or 0x25223824, followed by file records */
     fun probeKdz2(src: RandomSource): Boolean {
@@ -51,7 +51,7 @@ object KdzImage {
         val b = ByteBuffer.allocate(8)
         src.read(0, b); b.flip()
         val m = ByteArray(8).also { b.get(it) }
-        if (!m.contentEquals(byteArrayOf(0x18, 0x79, 0x44, 0x50))) return false  // 0x50447932 little-endian
+        if (!m.contentEquals(byteArrayOf(0x18.toByte(), 0x79.toByte(), 0x44.toByte(), 0x50.toByte()))) return false  // 0x50447932 little-endian
         val size = ByteBuffer.wrap(m, 4, 4).order(ByteOrder.LITTLE_ENDIAN).int
         return size == 1304 || size == 1320
     }
@@ -91,7 +91,7 @@ object KdzImage {
         val head = ByteBuffer.allocate(512)
         src.read(0, head); head.flip()
         val b = ByteArray(head.remaining()).also { head.get(it) }
-        if (!b.copyOfRange(0, 4).contentEquals(byteArrayOf(0x32, 0x96, 0x18, 0x74))) throw IOException("dz: not a v2 dz")
+        if (!b.copyOfRange(0, 4).contentEquals(byteArrayOf(0x32.toByte(), 0x96.toByte(), 0x18.toByte(), 0x74.toByte()))) throw IOException("dz: not a v2 dz")
         // part_count sits after magic+version+reserved+model_name+sw_version+build_date = 4+4+4+4+32+128+16
         val partCount = u32(b, 192).toInt()
         if (partCount <= 0 || partCount > 200_000) throw IOException("dz: chunk count $partCount")
@@ -99,7 +99,7 @@ object KdzImage {
         val probe = ByteBuffer.allocate(4)
         src.read(512, probe); probe.flip()
         val pm = ByteArray(4).also { probe.get(it) }
-        val v1 = pm.contentEquals(byteArrayOf(0x30, 0x12, 0x95, 0x78))
+        val v1 = pm.contentEquals(byteArrayOf(0x30.toByte(), 0x12.toByte(), 0x95.toByte(), 0x78.toByte()))
         var dataOff = 512L + partCount.toLong() * (if (v1) 512L else 124L)
         val out = ArrayList<Dz2Chunk>(partCount)
         var p = 512L
@@ -107,7 +107,7 @@ object KdzImage {
             val h = ByteBuffer.allocate(if (v1) 512 else 124)
             src.read(p, h); h.flip()
             val hb = ByteArray(h.remaining()).also { h.get(it) }
-            if (!hb.copyOfRange(0, 4).contentEquals(byteArrayOf(0x30, 0x12, 0x95, 0x78))) throw IOException("dz: chunk header magic at $p")
+            if (!hb.copyOfRange(0, 4).contentEquals(byteArrayOf(0x30.toByte(), 0x12.toByte(), 0x95.toByte(), 0x78.toByte()))) throw IOException("dz: chunk header magic at $p")
             // v0: magic(4) part_name(32) chunk_name(64) decompressed_size(4)@100 compressed_size(4)@104 hash(16)
             // v1 adds start_sector(4)@124 sector_count@128 hw_partition@132 crc@136 unique_part_id@140
             //     is_sparse@144 is_ubi@148 part_start_sector@152
