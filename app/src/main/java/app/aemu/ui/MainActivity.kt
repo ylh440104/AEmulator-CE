@@ -100,20 +100,6 @@ const val ACTION_BOOT = "app.aemu.BOOT"
 class MainActivity : ComponentActivity() {
     private val model: LibraryModel by viewModels()
 
-    /** every log an image keeps, gathered from its tree: works with the machine off, when the VM screen is gone */
-    private fun exportLogsFor(img: app.aemu.core.GuestImage) {
-        val ctx = this
-        android.os.Handler(ctx.mainLooper).post { android.widget.Toast.makeText(ctx, ctx.getString(R.string.exporting_logs), android.widget.Toast.LENGTH_SHORT).show() }
-        Thread {
-            val dir = runCatching {
-                app.aemu.core.CrashDigest.export(ctx, app.aemu.core.VmPaths(ctx, img.id), img, null)
-            }.getOrNull()
-            android.os.Handler(ctx.mainLooper).post {
-                if (dir == null) android.widget.Toast.makeText(ctx, ctx.getString(R.string.m_failed), android.widget.Toast.LENGTH_SHORT).show()
-                else android.widget.Toast.makeText(ctx, "${ctx.getString(R.string.m_logs_saved)}: ${dir.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
-            }
-        }.start()
-    }
 
     /** Language this activity was created with: a change means its string resources are stale and need context recreation. */
     private var style = ""
@@ -169,6 +155,20 @@ class MainActivity : ComponentActivity() {
         val need = want.filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
         if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
     }
+}
+
+/** every log an image keeps, gathered from its tree: works with the machine off, when the VM screen is gone */
+private fun exportLogsFor(ctx: Context, img: app.aemu.core.GuestImage) {
+    android.os.Handler(ctx.mainLooper).post { android.widget.Toast.makeText(ctx, ctx.getString(R.string.exporting_logs), android.widget.Toast.LENGTH_SHORT).show() }
+    Thread {
+        val dir = runCatching {
+            app.aemu.core.CrashDigest.export(ctx, app.aemu.core.VmPaths(ctx, img.id), img, null)
+        }.getOrNull()
+        android.os.Handler(ctx.mainLooper).post {
+            if (dir == null) android.widget.Toast.makeText(ctx, ctx.getString(R.string.m_failed), android.widget.Toast.LENGTH_SHORT).show()
+            else android.widget.Toast.makeText(ctx, ctx.getString(R.string.m_logs_saved) + ": " + dir.absolutePath, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }.start()
 }
 
 @Composable
@@ -265,7 +265,7 @@ fun Library(model: LibraryModel) {
                     onSettings = { settingsFor = img },
                     onRename = { renameFor = img },
                     onNewMachine = { containerFrom = img },
-                    onExportLogs = { exportLogsFor(img) },
+                    onExportLogs = { exportLogsFor(ctx, img) },
                     onReset = { resetFor = img },
                     onDelete = { deleteFor = img },
                 )
