@@ -1149,6 +1149,31 @@ static long trap2(long nr, long *a, void *uc, char **pbp) {
         return S3(nr, a[0], a[1], a[2]);
     case NR_mmap:
         if (a[2] == 1 && is_binder_fd((int)a[4])) return binder_mmap((u64)a[0], (u64)a[1], a[3]);
+        // Android 16's ART asserts that the boot image relocation delta is aligned to 16 KB
+        // (kElfSegmentAlignment); a kernel with 4 KB pages hands out 4 KB-aligned addresses and
+        // ignores alignment hints, so zygote64 aborts in ImageSpace::DoRelocateSpaces on every
+        // GSI of 16. The mapping is taken oversized first, then re-made MAP_FIXED on its own
+        // 16 KB-aligned interior — with the very same offset, so the content lands where the
+        // caller expects it — and the slack around it is returned to the kernel. The address
+        // never leaves this engine, so nothing can claim it in between, and a failed re-make
+        // falls back to the plain call. 32-bit programs keep the old path: their address space
+        // has no such check, and their property-area branch below still applies.
+        if (!g_is32 && !(a[3] & 0x10 /*MAP_FIXED*/)) {
+            u64 len = (u64)a[1];
+            u64 want = ((len + 0x3fffUL) & ~0x3fffUL) + 0x4000UL;
+            long p = S6(nr, a[0], want, a[2], a[3], a[4], a[5]);
+            if (p < 0 && p > -4096) return p;
+            u64 base = ((u64)p + 0x3fffUL) & ~0x3fffUL;
+            long r = S6(nr, base, len, a[2], (a[3] | 0x10) & ~0x100000UL, a[4], a[5]);
+            if (r >= 0 && r < 4096) {
+                if (base > (u64)p) S2(NR_munmap, p, base - (u64)p);
+                u64 keep = base + ((len + 0xfffUL) & ~0xfffUL);
+                if (keep < (u64)p + want) S2(NR_munmap, keep, (u64)p + want - keep);
+                return (long)base;
+            }
+            S2(NR_munmap, p, want);
+            return S6(nr, a[0], len, a[2], a[3], a[4], a[5]);
+        }
         if (g_is32 && a[2] == 1 && g_props[0] && (int)a[4] >= 0 && !gles2_for_32()) {
             // 32-bit programs only have the GLES 1 renderer: in their (private) view of the property area the
             // "GLES 2 is there" flag reads 0, so their windows are drawn without hwui. Only that page is a copy.
