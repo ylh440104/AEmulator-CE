@@ -340,7 +340,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 overrides["ro.product.cpu.abilist32"] = ""
             }
         }
-        overrides["dalvik.vm.execution-mode"] = if (s.jit) "int:jit" else "int:fast"
+        overrides["dalvik.vm.execution-mode"] = if (s.jit && !(engine == Engine.KK && !s.native32 && img.api < 14)) "int:jit" else "int:fast"
         if (s.lowRam || s.ramMb in 1..768) overrides["ro.config.low_ram"] = "true"
         if (s.ramMb > 0) {
             // Dalvik heap sized from the guest RAM budget (like a real device of that class)
@@ -739,7 +739,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         var props = propsFile
         // звук: с ro.kernel.qemu=1 mediaserver берёт эмуляторный вывод в /dev/eac
         if (svc.name == "mediaserver") props = this.props.privateCopy("media", mapOf("ro.kernel.qemu" to "1"))
-        val argv = if (svc.name == "zygote" && !settings.jit && img.runtime == "dalvik")
+        val argv = if (svc.name == "zygote" && (!settings.jit || engine == Engine.KK && !s.native32 && img.api < 14) && img.runtime == "dalvik")
             svc.argv.take(1) + "-Xint:fast" + svc.argv.drop(1) else svc.argv
         // отладка: файл run/strace.<служба> включает трассировку системных вызовов qemu
         if (File(paths.bin, "strace.${svc.name}").exists()) extra["QEMU_STRACE"] = "1"
