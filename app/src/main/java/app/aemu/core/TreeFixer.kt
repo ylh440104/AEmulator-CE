@@ -2025,7 +2025,7 @@ class TreeFixer(
         )
         /** the entries of [SETUP_WIZARDS] that take over the screen at first boot (the AOSP provisioner finishes by itself) */
         val FIRST_RUN_WIZARDS = listOf("com.sec.android.app.SecSetupWizard", "com.google.android.setupwizard", "com.miui.provision",
-            "com.htc.setupwizard", "com.sonyericsson.setupwizard", "com.sonymobile.setupwizard")
+            "com.htc.setupwizard", "com.sonyericsson.setupwizard", "com.sonymobile.setupwizard", "com.android.setupwizard")
         /** Прошивка MediaTek, где AudioFlinger связан с собственной звуковой библиотекой MTK (/dev/eac). */
         fun isMtkAudio(root: File): Boolean {
             if (File(root, "system/lib/libaudio.mtk.so").isFile) return true   // already swapped for our HAL
