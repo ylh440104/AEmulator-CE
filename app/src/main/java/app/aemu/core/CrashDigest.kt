@@ -77,6 +77,12 @@ object CrashDigest {
         val home = File(android.os.Environment.getExternalStorageDirectory(), FirmwareFolder.HOME)
         val out = File(home, "logs/${img.name.replace(Regex("[^\\p{L}\\p{N} ._-]"), "_").take(40)}-$stamp")
         out.mkdirs()
+        runCatching {
+            val logsRoot = File(home, "logs")
+            val dirs = logsRoot.listFiles()?.filter { it.isDirectory } ?: emptyList()
+            val used = dirs.sumOf { d -> d.listFiles()?.sumOf { it.length() } ?: 0L }
+            if (used > 100L shl 20) dirs.sortedBy { it.name }.dropLast(8).forEach { it.deleteRecursively() }
+        }
 
         runCatching {
             File(out, "summary.txt").writeText(buildString {

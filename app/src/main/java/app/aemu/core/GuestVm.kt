@@ -255,6 +255,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         runCatching { logFile.writeText("") }
         runCatching { File(paths.bin, "alive").writeText(AProcess.myPid().toString()) }
         runCatching { paths.bin.listFiles()?.forEach { if (it.isFile && it.name.endsWith(".log") && it.length() > (8L shl 20)) it.delete() } }
+        runCatching {
+            val total = paths.bin.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+            if (total > 200L shl 20) paths.bin.listFiles()?.filter { it.isFile && it.name.endsWith(".log") }?.sortedByDescending { it.lastModified() }?.drop(8)?.forEach { it.delete() }
+        }
         log("image \"${img.name}\": ${img.displayVersion}, ${img.skin}, engine ${engine.title}")
         if (!File(paths.root, "system/framework").isDirectory) error("firmware tree missing")
         val qemu = paths.nativeBin(if (engine == Engine.N64) kernel.runner else engine.qemu)
