@@ -8,7 +8,7 @@ The latest release of the Community Edition is supported.
 
 Do not open a public issue for security problems.
 
-Email: aemulator.ce@gmail.com
+Email: ylh440104@gmail.com
 
 Include steps to reproduce, the affected version (versionName from the APK), and the guest firmware involved if any. A proof of concept is welcome but not required.
 
