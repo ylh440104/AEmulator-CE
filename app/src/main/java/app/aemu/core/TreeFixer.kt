@@ -792,7 +792,8 @@ class TreeFixer(
                 from != "audio.primary.default.so" || htcLike -> from
                 // 4.0 has its own audio_hw_device layout; Qualcomm CAF builds add set_fm_volume/open_output_session
                 img.api in 14..15 -> if (qcomAudioFlinger()) "audio.primary.ics-qcom.so" else "audio.primary.ics.so"
-                img.api >= 16 -> "audio.primary.aosp.so"
+                img.api == 16 -> "audio.primary.v1.so"
+                img.api >= 17 -> "audio.primary.aosp.so"
                 else -> from
             }
             val asset = if (name.startsWith("@")) "engines/common/${name.drop(1)}" else "engines/${engine.id}/$name"
@@ -1615,9 +1616,7 @@ class TreeFixer(
         val cur = File(root, "system/etc/audio_policy.conf")
         val rom = File(root, "system/etc/audio_policy.conf.rom")
         if (!cur.isFile && !rom.isFile && img.api < 16) return
-        runCatching {
-            if (cur.isFile && !rom.isFile) cur.copyTo(rom)
-            val text = """
+        val text = """
                 |# создано AEmulatorCE: единственный модуль — звуковой HAL эмулятора
                 |global_configuration {
                 |  attached_output_devices AUDIO_DEVICE_OUT_SPEAKER
@@ -1647,8 +1646,19 @@ class TreeFixer(
                 |  }
                 |}
                 |""".trimMargin()
+        runCatching {
+            if (cur.isFile && !rom.isFile) cur.copyTo(rom)
             if (cur.takeIf { it.isFile }?.readText() != text) cur.writeText(text)
         }.onFailure { log("audio: failed to write audio_policy.conf: ${it.message}") }
+        for (d in listOf("vendor/etc", "system/vendor/etc")) {
+            val v = File(root, "$d/audio_policy.conf")
+            if (!v.isFile) continue
+            val vrom = File(root, "system/.aemu-parked/${d.replace('/', '#')}#audio_policy.conf")
+            runCatching {
+                if (!vrom.exists()) { vrom.parentFile?.mkdirs(); v.renameTo(vrom) }
+                else v.delete()
+            }.onFailure { log("audio: vendor policy of $d: ${it.message}") }
+        }
         // 8.0+ reads audio_policy_configuration.xml (odm, vendor, then system) and never the .conf: a phone's one
         // (deep buffer, offload, voice ports) makes the policy ask the engine's HAL for streams it cannot open, and
         // audioserver dies on the first sound. The same single output goes to vendor/etc, read before system/etc.

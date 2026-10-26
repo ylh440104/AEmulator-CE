@@ -64,6 +64,13 @@ jobs:
             -Wl,-soname,libaemushim.so -Wl,--build-id=none -o "../../$OUT" aemushim.c crash.c -lc || \
             { echo "::error::the shim failed to rebuild"; exit 1; }
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "../../$OUT" 2>/dev/null || true
+          cd ../audiohal
+          "$CC" --target=armv7a-linux-androideabi21 -march=armv7-a -mthumb -mfloat-abi=softfp -Os -fPIC -shared \
+            -nostdlib -ffreestanding -fno-builtin -fvisibility=hidden -fno-stack-protector -DAEMU_V1 \
+            -Wl,--hash-style=sysv -Wl,-z,norelro -Wl,--build-id=none -Wl,-soname,audio.primary.default.so \
+            -o "../../app/src/main/assets/engines/kk/audio.primary.v1.so" audio_hal.c -lc || \
+            { echo "::error::the 4.1 audio HAL failed to rebuild"; exit 1; }
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "../../app/src/main/assets/engines/kk/audio.primary.v1.so" 2>/dev/null || true
           cd ../..
           git diff --stat -- "$OUT"
 

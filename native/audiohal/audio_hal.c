@@ -488,6 +488,8 @@ static int hal_open(const struct hw_module *m, const char *id, struct hw_device 
     d->common.tag = 0x48574454;          /* HARDWARE_DEVICE_TAG */
 #ifdef AEMU_ICS
     d->common.version = 0;               /* 4.0: no device API versioning */
+#elif defined(AEMU_V1)
+    d->common.version = 0x0100;          /* 4.1: its AudioFlinger refuses 2_0 ("wrong audio hw device version 0200") */
 #else
     d->common.version = 0x0200;          /* AUDIO_DEVICE_API_VERSION_2_0 */
 #endif
