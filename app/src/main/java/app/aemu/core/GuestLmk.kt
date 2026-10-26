@@ -20,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap
  * Когда памяти мало, убиваем самый неважный и самый толстый процесс, как это делал бы lowmemorykiller.
  */
 /** [ramMb] > 0: guest RAM budget; background apps are killed when the guest's total RSS exceeds it. */
-class GuestLmk(private val root: File, private val lowRam: Boolean, private val log: (String) -> Unit, private val ramMb: Int = 0) {
+class GuestLmk(private val root: File, private val lowRam: Boolean, private val log: (String) -> Unit, private val ramMb: Int = 0,
+                private val translated: Boolean = false) {
     private val adj = ConcurrentHashMap<Int, Int>()
     @Volatile private var running = false
     private var server: LocalServerSocket? = null
@@ -145,8 +146,10 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
             val cached = adj.filter { it.value >= CACHED }.keys
             if (cached.isEmpty()) continue
             val avail = memAvailableMb()
-            // RSS overcounts shared zygote pages, so the budget check is approximate (upper bound)
-            val overBudget = ramMb > 0 && adj.keys.sumOf { rssMb(it).coerceAtLeast(0) } > ramMb * 2
+            // RSS overcounts shared zygote pages, so the budget check is approximate (upper bound);
+            // under the qemu translator every guest process is a qemu-arm with its own TCG arena, and the
+            // translation buffers alone can be several times the guest's own memory: the budget is unusable there
+            val overBudget = ramMb > 0 && !translated && adj.keys.sumOf { rssMb(it).coerceAtLeast(0) } > ramMb * 2
             // The count and the budget only matter when the phone runs short: with plenty free, killing a cached
             // service just makes the activity manager start it again (MIUI keeps 11-14 of them: a kill every 5 s,
             // providers gone under their clients, the CPU busy with restarts)
