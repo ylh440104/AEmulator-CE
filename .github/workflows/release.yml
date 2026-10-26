@@ -128,8 +128,20 @@ jobs:
           files: out/app.aemu.apk
           body: |
             Signed build of AEmulator CE.
-
             Android 8.0 and later, arm64.
-
             The APK is signed with the project release key, so it installs over an earlier build of this project
             without uninstalling it.
+
+            Fixed in this line of builds:
+            - 2.x firmware no longer runs natively (non-PIE binaries are refused by a modern kernel) and its
+              dalvik JIT is off under the qemu translator (TCG segfaults killed system_server after boot)
+            - 4.1 TouchWiz boots again: an audio HAL reporting version 1.0 instead of 2.0, and the vendor
+              audio_policy.conf is set aside so the engine one is read
+            - Android 4.3+ firmware with SELinux: guest libselinux sees the emulator as SELinux-less
+            - Android 16 GSI: guest mmap results are aligned to 16 KB, as ART's kElfSegmentAlignment check demands
+            - Motorola fastboot xml packages (system_signed/boot_signed/recovery_signed) import
+            - Sony ftf sin entries with a middle name segment (system.ext4.sin) import
+            - The AOSP 1.x setup wizard is skipped (it died on a missing provider and left a black screen)
+            - Log directories are capped (a busy image accumulated 228 GB overnight)
+
+            Report problems at https://github.com/ylh440104/AEmulator-CE/issues
