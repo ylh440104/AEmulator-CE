@@ -321,7 +321,7 @@ class Importer(
                 }
                 base.equals("payload.bin", true) -> withEntrySource(zip, e) { importPayload(it) }
                 // Sony .ftf: system.sin is the system partition, kernel.sin the kernel with the ramdisk
-                base.matches(Regex("(?i)(system|kernel|boot)\\.sin")) && !(gotSystem && base.startsWith("system", true)) ->
+                base.matches(Regex("(?i)(system|kernel|boot)(\\.[a-z0-9_-]+)*\\.sin")) && !(gotSystem && base.startsWith("system", true)) ->
                     zip.getInputStream(e).use { importSin(it, base) }
                 base.matches(Regex("(?i)vendor(\\.ext4)?\\.img")) ->
                     withEntrySource(zip, e) { runCatching { importImage(if (SparseSource.probe(it)) SparseSource(listOf(it)) else it, "vendor") } }
@@ -432,7 +432,7 @@ class Importer(
                     base.equals("boot.img", true) -> takeBoot(stream.readBytes())
                     base.equals("recovery.img", true) && e.size < 512_000_000 -> recovery = stream.readBytes()
                     base.matches(SYSTEM_IMAGE) -> nested.add(spill(stream, base) to "system")
-                    base.matches(Regex("(?i)(system|kernel|boot)\\.sin")) -> importSin(stream, base)
+                    base.matches(Regex("(?i)(system|kernel|boot)(\\.[a-z0-9_-]+)*\\.sin")) -> importSin(stream, base)
                     base.matches(Regex("(?i).*\\.(zip|7z|rar|tar|tar\\.md5|md5|tgz|tar\\.gz|pac|ftf|kdz|dz|new\\.dat|transfer\\.list)")) && e.size > 20_000_000 &&
                         !base.startsWith("MODEM") && !base.startsWith("CP_") && !base.contains("CSC") ->
                         nested.add(spill(stream, base) to "archive")
@@ -528,7 +528,7 @@ class Importer(
                         try { FileChannel.open(t.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), mount) } } finally { t.delete() }
                     }.onFailure { log("$base skipped: ${it.message}") }
                 }
-                base.matches(Regex("(?i)(system|kernel|boot)\\.sin")) && e.isFile -> importSin(tar.nonClosing(), base)
+                base.matches(Regex("(?i)(system|kernel|boot)(\\.[a-z0-9_-]+)*\\.sin")) && e.isFile -> importSin(tar.nonClosing(), base)
                 base.matches(Regex("(?i)(boot\\.img|zImage|kernel)(\\.lz4)?")) && e.isFile -> takeBoot(maybeLz4(tar, base).readBytes())
                 base.matches(Regex("(?i)recovery\\.img(\\.lz4)?")) && e.isFile && e.size < 64_000_000 -> recovery = maybeLz4(tar, base).readBytes()
                 base.matches(Regex("(?i).*\\.(tar|tar\\.md5)")) && e.isFile && e.size > 20_000_000 -> importTarStream(tar.nonClosing(), base, depth + 1)
