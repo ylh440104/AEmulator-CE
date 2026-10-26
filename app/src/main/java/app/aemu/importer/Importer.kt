@@ -959,10 +959,10 @@ class Importer(
     companion object {
         /** partition images other than system inside a tar (taken after system, which SYSTEM_IMAGE catches first) */
         private val PART_IMAGE = Regex("(?i)(vendor|product|odm|prism|optics)\\.img(\\.ext4)?(\\.lz4)?")
-        /** system partition images by name (ext4/sparse, Samsung RFS, YAFFS2 dumps, super.img of 10+, erofs, f2fs) */
-        private val SYSTEM_IMAGE = Regex("(?i)system(_[a-z0-9]+)?(\\.ext4|\\.erofs|\\.f2fs)?\\.img(\\.ext4)?|" +
+        /** system partition images by name (ext4/sparse, Samsung RFS, YAFFS2 dumps, super.img of 10+, erofs) */
+        private val SYSTEM_IMAGE = Regex("(?i)system(_[a-z0-9]+)?(\\.ext4|\\.erofs)?\\.img(\\.ext4)?|" +
             "system_image\\.img|system\\.raw\\.img|factoryfs\\.(img|rfs)|" +
-            "system\\.(rfs|yaffs2?|ext4|erofs|f2fs)|super(\\.raw)?\\.img|system_[ab]\\.img")
+            "system\\.(rfs|yaffs2?|ext4|erofs)|super(\\.raw)?\\.img|system_[ab]\\.img")
         /** partitions a vendor's skin adds beside the AOSP ones, mounted at the root under their own name: Xiaomi
          *  mi_ext (HyperOS apps and ro.mi.os.*), OPPO/realme/OnePlus my_*, vivo vgc */
         private val SKIN_PARTITION = Regex("mi_ext|my_[a-z]+|vgc|prism|optics")
