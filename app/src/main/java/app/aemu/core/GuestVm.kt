@@ -167,7 +167,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (!RecoveryImage.installed(paths)) error("this firmware has no recovery installed")
         val is64 = RecoveryImage.isElf64(paths)
         val qemu = paths.nativeBin(if (is64) kernel.runner else Engine.KK.qemu)
-        if (!is64 && !(img.settings.native32 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
+        if (!is64 && !(img.settings.native32 && img.api >= 14 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
         killLeftovers()
         HostNative.limitStackSafe()
         TreeFixer(ctx, paths, img, ::log).fixup()   // framebuffer, input node
@@ -197,7 +197,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // debugging: run/recovery.strace traces the guest's system calls into run/recovery.trace
         val trace = if (File(paths.bin, "recovery.strace").exists()) listOf("-strace", "-D", File(paths.bin, "recovery.trace").absolutePath) else emptyList()
         val cmd = when {
-            img.settings.native32 && CpuInfo.hasAArch32 && !is64 -> listOf(File(r, "sbin/recovery").absolutePath)
+            img.settings.native32 && img.api >= 14 && CpuInfo.hasAArch32 && !is64 -> listOf(File(r, "sbin/recovery").absolutePath)
             is64 -> listOf(qemu.absolutePath, "/sbin/recovery", File(r, "sbin/recovery").absolutePath)
             else -> listOf(qemu.absolutePath, "-L", r.absolutePath, "-0", "/sbin/recovery") + trace + File(r, "sbin/recovery").absolutePath
         }

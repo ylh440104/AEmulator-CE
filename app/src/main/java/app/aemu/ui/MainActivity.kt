@@ -358,12 +358,12 @@ private fun ContainerDialog(
     var copy by remember { mutableStateOf(false) }
     var preset by remember { mutableStateOf(1) } // 0: Perf, 1: Balanced, 2: Lite
     var settings by remember(from) { mutableStateOf(from.settings) }
-    val has32 = app.aemu.core.CpuInfo.hasAArch32
+    val has32 = app.aemu.core.CpuInfo.hasAArch32 && from.api >= 14
 
     fun applyPreset(p: Int) {
         preset = p
         settings = when (p) {
-            0 -> settings.copy(gpu = true, hwui = true, jit = true, lowRam = false, native32 = has32)
+            0 -> settings.copy(gpu = true, hwui = true, jit = true, lowRam = false, native32 = has32 && from.api >= 14)
             1 -> settings.copy(gpu = true, hwui = true, jit = true, lowRam = false, native32 = false)
             else -> settings.copy(gpu = false, hwui = false, jit = true, lowRam = true, width = 480, height = 800, native32 = false)
         }

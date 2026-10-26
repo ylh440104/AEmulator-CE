@@ -34,7 +34,6 @@ class GuestRunner(
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
     val qemu: File get() = paths.nativeBin(if (engine == Engine.N64) kernel.runner else engine.qemu)
     val runner: File get() = paths.nativeBin(engine.runner)
-
     fun cmdline(argv: List<String>, propsFile: File? = null): List<String> {
         val prog = argv.first()
         val host = File(paths.root, prog.removePrefix("/")).absolutePath
@@ -44,7 +43,7 @@ class GuestRunner(
         if (runner.canExecute() && props.isFile) {
             cmd += runner.absolutePath; cmd += props.absolutePath; cmd += "30"
         }
-        if (img.settings.native32 && CpuInfo.hasAArch32) {
+        if (img.settings.native32 && img.api >= 14 && CpuInfo.hasAArch32) {
             cmd += host
             cmd += argv.drop(1)
             return cmd
