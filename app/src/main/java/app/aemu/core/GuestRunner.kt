@@ -184,6 +184,10 @@ class GuestRunner(
         if (tbFlush > 0) e["DHD_TBFLUSH"] = tbFlush.toString()
         if (noSmc) e["DHD_NO_SMC"] = "1"
         if (noTcgOpt) e["DHD_NO_TCGOPT"] = "1"
+        // 1.x/2.x early: the Glide assembler and the dalvik JIT emit ARM code into anonymous pages at runtime;
+        // qemu's page-attribute SMC detection misses some of those writes on old kernels and the guest dies with
+        // a SIGSEGV right after ARMAssembler reports the generated scanline
+        if (tbFlush == 0 && !noSmc && img.api < 10) e["DHD_TBFLUSH"] = "64"
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)
         return e
