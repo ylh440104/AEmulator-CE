@@ -49,6 +49,26 @@ jobs:
             yes | "$SM" --install "platforms;android-36" "build-tools;35.0.0" > /dev/null 2>&1 || \
               echo "::warning::sdkmanager could not add the packages"
           fi
+      - name: Rebuild the guest shim when its source changed
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          SM=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
+          [ -n "$SM" ] || { echo "::warning::no sdkmanager, the shim stays as committed"; exit 0; }
+          yes | "$SM" --install "ndk;27.2.12479018" > /dev/null 2>&1 || { echo "::warning::NDK install failed"; exit 0; }
+          NDK=$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1)
+          [ -n "$NDK" ] || { echo "::warning::no NDK found"; exit 0; }
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          [ -x "$CC" ] || { echo "::warning::no clang in the NDK"; exit 0; }
+          OUT="app/src/main/assets/engines/common/libaemushim.so"
+          cd native/guestshim
+          "$CC" --target=armv7a-linux-androideabi21 -march=armv7-a -mthumb -Os -fPIC -shared -nostdlib \
+            -fvisibility=hidden -fno-stack-protector -ffreestanding -fno-builtin \
+            -Wl,--hash-style=sysv -Wl,-z,norelro -Wl,--no-undefined \
+            -Wl,-soname,libaemushim.so -Wl,--build-id=none -o "../../$OUT" aemushim.c crash.c -lc || \
+            { echo "::error::the shim failed to rebuild"; exit 1; }
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "../../$OUT" 2>/dev/null || true
+          cd ../..
+          git diff --stat -- "$OUT"
 
       - name: Build the signed APK
         env:

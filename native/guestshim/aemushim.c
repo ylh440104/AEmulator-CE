@@ -1177,6 +1177,14 @@ EXPORT int getsockname(int fd, void *addr, unsigned *len) {
 /* Extended attributes are unavailable here (ENOSYS): 7.0+ installd gives up on every app dir when restorecon cannot
  * read the SELinux label, and never creates the /data/user_de storage. Label reads give a fixed label, writes succeed.
  * getxattr passes through except for user.default, before this library is relocated. */
+/* 4.3's zygote asks libselinux whether there is a policy to switch to, and the answer comes from the host kernel:
+ * the phone has selinuxfs mounted, "SELinux is on" — selinux_android_setcontext then writes a guest context into
+ * /proc/self/attr, the host has no such context, the write fails with ENOENT and zygote aborts ("cannot set SELinux
+ * context", system_server dies the moment it is forked, "zygote exited (code 137)" is all the user ever sees).
+ * With "no SELinux" zygote skips the whole branch: the firmware runs exactly as the emulator intended it. */
+EXPORT int is_selinux_enabled(void) { return 0; }
+EXPORT int security_getenforce(void) { return 0; }
+EXPORT int security_setenforce(int on) { (void)on; return 0; }
 static long sys5(long n, long a, long b, long c, long d, long e);
 /* 7.0+ installd migrates app data between /data/user_de and /data/data on every boot unless the target dir carries
  * user.default, deleting one copy each time: report that marker as present. Everything else is the plain syscall
