@@ -307,11 +307,14 @@ class Importer(
                     zip.getInputStream(e).use { writeFile(n, it, e.unixMode.takeIf { m -> m != 0 }) }
                     gotSystem = true
                 }
-                base.equals("boot.img", true) || inFw && base.matches(Regex("(?i)boot(_a)?\\.img")) ->
+                base.equals("boot.img", true) || inFw && base.matches(Regex("(?i)boot(_a)?\\.img")) ||
+                base.matches(Regex("(?i)boot(_signed)?")) ->
                     zip.getInputStream(e).use { takeBoot(it.readBytes()) }
-                base.equals("recovery.img", true) || inFw && base.matches(Regex("(?i)recovery(_a)?\\.img")) ->
+                base.equals("recovery.img", true) || inFw && base.matches(Regex("(?i)recovery(_a)?\\.img")) ||
+                base.matches(Regex("(?i)recovery(_signed)?")) ->
                     if (e.size < 512_000_000) zip.getInputStream(e).use { recovery = it.readBytes() }
                 inFw && base.matches(Regex("(?i)super(\\.sparse)?\\.img")) -> withEntrySource(zip, e) { importImage(it, "system") }
+                base.matches(Regex("(?i)system(_signed)?")) -> withEntrySource(zip, e) { importImage(it, "system") }
                 inFw && base.matches(Regex("(?i)(system|vendor|product|system_ext|odm)(\\.sparse)?\\.img")) -> {
                     val part = base.substringBefore('.').lowercase()
                     withEntrySource(zip, e) {
