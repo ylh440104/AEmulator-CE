@@ -48,8 +48,8 @@ android {
         // 28: гостевые бинарники запускаются из каталога данных приложения (W^X для targetSdk>=29)
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 17
-        versionName = "0.0.1.7"
+        versionCode = 18
+        versionName = "0.0.1.8"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
