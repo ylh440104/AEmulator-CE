@@ -166,7 +166,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         log("image \"${img.name}\": recovery mode")
         if (!RecoveryImage.installed(paths)) error("this firmware has no recovery installed")
         val is64 = RecoveryImage.isElf64(paths)
-        val qemu = paths.nativeBin(if (is64) kernel.runner else Engine.KK.qemu)
+        val qemu = paths.nativeBin(if (is64) kernel.runner else if (img.api < 10) "libqemu_kk_rie.so" else Engine.KK.qemu)
         if (!is64 && !(img.settings.native32 && img.api >= 14 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
         killLeftovers()
         HostNative.limitStackSafe()

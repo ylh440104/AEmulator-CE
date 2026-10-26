@@ -32,7 +32,11 @@ class GuestRunner(
 
     val engine: Engine get() = img.engine
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
-    val qemu: File get() = paths.nativeBin(if (engine == Engine.N64) kernel.runner else engine.qemu)
+    val qemu: File get() = paths.nativeBin(when {
+        engine == Engine.N64 -> kernel.runner
+        engine == Engine.KK && img.api < 10 -> "libqemu_kk_rie.so"
+        else -> engine.qemu
+    })
     val runner: File get() = paths.nativeBin(engine.runner)
     fun cmdline(argv: List<String>, propsFile: File? = null): List<String> {
         val prog = argv.first()
