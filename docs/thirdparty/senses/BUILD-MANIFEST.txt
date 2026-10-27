@@ -1,2 +1,2 @@
-d1864e3f6f73abf7290213691f11d5a7d324d70da7487dff7ecb951bba60552a  /root/qemu-8.2.4/build/qemu-arm
-guest personality() fully emulated: no host personality() call at all, not even a query — the phone sandbox kills the syscall with SIGSYS
+f1e116dd357128a3d441aafb56c8a867c4de3ad124d8fcd3bbea4e80eeab5c22  /root/qemu-8.2.4/build/qemu-arm
+SIGSYS diagnostic handler: reports si_code/si_syscall/si_arch/si_addr into GUEST_EXIT_LOG; GUEST_PAGE_LOG enabled on api<10 for the boot trace

@@ -207,6 +207,8 @@ class GuestRunner(
             )) e[d]?.let { e[g] = it }
             e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
             e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }
+            e["GUEST_EXIT_LOG"] = File(paths.bin, "senses-exit.log").absolutePath
+            e["GUEST_PAGE_LOG"] = File(paths.bin, "senses-pages.log").absolutePath
         }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)
