@@ -16,8 +16,7 @@ val canSign = signProps.getProperty("storeFile")?.let { rootProject.file(it).isF
 
 // Engine guest files: every kernel carries its own copy of most of them (473 MB, 110 MB of it different, all stored
 // uncompressed because of their names). The APK gets each content once, compressed, as assets/blobs/<sha1>, plus
-// assets/engines.idx ("path<TAB>sha1<TAB>size"); the app reads them through core/EngineAssets.kt.FUCk you lenovo
-// FUCK YOU lenovo.your motherfucking appops is a piece of shit！！
+// assets/engines.idx ("path<TAB>sha1<TAB>size"); the app reads them through core/EngineAssets.kt
 val engineSrc = file("src/main/assets/engines")
 val engineOut = layout.buildDirectory.dir("generated/engineAssets")
 val packEngines = tasks.register("packEngines") {
