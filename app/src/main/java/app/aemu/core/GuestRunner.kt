@@ -205,8 +205,8 @@ class GuestRunner(
                 "DHD_TBFLUSH" to "GUEST_TBFLUSH", "DHD_NO_TCGOPT" to "GUEST_NO_TCGOPT",
                 "DHD_DNS53" to "GUEST_DNS53"
             )) e[d]?.let { e[g] = it }
-            e["GUEST_BINDER"] = e["DHD_BINDER"]
-            e["GUEST_INPUT"] = e["DHD_INPUT"]
+            e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
+            e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }
         }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)
