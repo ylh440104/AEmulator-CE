@@ -54,7 +54,7 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
-        if (img.api < 10) cmd += listOf("-d", "strace", "-D", "/storage/emulated/0/AEmulatorCE/senses-strace.log")
+        if (img.api < 10) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
             if (qemuStrace) cmd += "-strace"
@@ -208,8 +208,8 @@ class GuestRunner(
             )) e[d]?.let { e[g] = it }
             e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
             e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }
-            e["GUEST_EXIT_LOG"] = "/storage/emulated/0/AEmulatorCE/senses-exit.log"
-            e["GUEST_PAGE_LOG"] = "/storage/emulated/0/AEmulatorCE/senses-pages.log"
+            e["GUEST_EXIT_LOG"] = File(paths.bin, "senses-exit.log").absolutePath
+            e["GUEST_PAGE_LOG"] = File(paths.bin, "senses-pages.log").absolutePath
         }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)

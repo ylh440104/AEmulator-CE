@@ -263,6 +263,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (!File(paths.root, "system/framework").isDirectory) error("firmware tree missing")
         val qemu = paths.nativeBin(if (engine == Engine.N64) kernel.runner else engine.qemu)
         if (!qemu.canExecute()) error("translator ${qemu.name} is not executable")
+        if (img.api < 10) {
+            val self = guestRunner.run(listOf("/system/bin/sh", "-c", "true"), 20_000)
+            log("· translator probe ${qemu.name}: exit ${self.first}${if (self.second.isNotBlank()) " / ${self.second.trim().take(200)}" else ""}")
+        }
         if (engine == Engine.N64) log("· kernel ${kernel.tag} (${kernel.runner})")
         // the guest's SwiftShader (legacy, reads SwiftShader.ini from the process's directory, this one) finds one core
         // on Android and draws every frame in a single thread: MIUI 8 at 1080×1920 flipped pages at 19 fps, 59 with 8.
