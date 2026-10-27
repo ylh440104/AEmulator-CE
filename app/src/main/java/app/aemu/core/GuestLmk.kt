@@ -144,25 +144,29 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
             Thread.sleep(2000)
             adj.keys.removeAll { !File("/proc/$it").exists() }
             val cached = adj.filter { it.value >= CACHED }.keys
-            if (cached.isEmpty()) continue
+            val candidates = cached.filterNot { pid ->
+                val name = runCatching { File("/proc/$pid/cmdline").readText().substringBefore('\u0000').substringAfterLast('/') }.getOrDefault("")
+                name == "zygote" || name == "zygote64" || name == "system_server"
+            }
+            if (candidates.isEmpty()) continue
             val avail = memAvailableMb()
             // RSS overcounts shared zygote pages, so the budget check is approximate (upper bound);
             // under the qemu translator every guest process is a qemu-arm with its own TCG arena, and the
             // translation buffers alone can be several times the guest's own memory: the budget is unusable there
-            val overBudget = ramMb > 0 && !translated && adj.keys.sumOf { rssMb(it).coerceAtLeast(0) } > ramMb * 2
+            val overBudget = ramMb > 0 && !translated && candidates.sumOf { rssMb(it).coerceAtLeast(0) } > ramMb * 2
             // The count and the budget only matter when the phone runs short: with plenty free, killing a cached
             // service just makes the activity manager start it again (MIUI keeps 11-14 of them: a kill every 5 s,
             // providers gone under their clients, the CPU busy with restarts)
             val tight = avail < minHost * 2
-            if (avail >= minHost && !(tight && (cached.size > maxCached || overBudget))) continue
-            val sizes = cached.associateWith { rssMb(it) }
+            if (avail >= minHost && !(tight && (candidates.size > maxCached || overBudget))) continue
+            val sizes = candidates.associateWith { rssMb(it) }
             // сначала самый неважный, среди равных — самый большой
-            val victim = cached.maxWithOrNull(compareBy<Int> { adj[it] ?: 0 }.thenBy { sizes[it] ?: 0 }) ?: continue
+            val victim = candidates.maxWithOrNull(compareBy<Int> { adj[it] ?: 0 }.thenBy { sizes[it] ?: 0 }) ?: continue
             val a = adj[victim]
             runCatching { Os.kill(victim, OsConstants.SIGKILL) }
             adj.remove(victim)
             kills++
-            log("memory: killed background process $victim (adj $a, ${sizes[victim]} MB; cached ${cached.size}, host free $avail MB)")
+            log("memory: killed background process $victim (adj $a, ${sizes[victim]} MB; cached ${candidates.size}, host free $avail MB)")
             Thread.sleep(3000)
         }
     }
