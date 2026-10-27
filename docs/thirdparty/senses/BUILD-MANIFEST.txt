@@ -1,3 +1,2 @@
-9848736bf340cf66cb04338096a12db44890fda5a36c215137471ff633c200ee  /root/qemu-8.2.4/build/qemu-arm
-built locally: Ubuntu 24.04 aarch64, gcc 13.3, qemu 8.2.4 + all 101 SENSES patches (sha256 of source: ecf5537feab92641b99d7482f551f2195d3a5bd34acef9d52bfbff353a607397)
-source: https://github.com/Istratii-tech/SENSES (GPL-2.0-or-later)
+9633ef8e1bae3fa8540d0dc0efd18a02354693ab8549f2cd76865d9fe9fda10d  /root/qemu-8.2.4/build/qemu-arm
+plus local change: guest personality() is emulated in-process and never forwarded to the host (Android app seccomp returns SIGSYS for personality(PER_LINUX32))
