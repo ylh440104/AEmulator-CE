@@ -1,2 +1,2 @@
-f1e116dd357128a3d441aafb56c8a867c4de3ad124d8fcd3bbea4e80eeab5c22  /root/qemu-8.2.4/build/qemu-arm
-SIGSYS diagnostic handler: reports si_code/si_syscall/si_arch/si_addr into GUEST_EXIT_LOG; GUEST_PAGE_LOG enabled on api<10 for the boot trace
+c534ca4e6504265e05fa426626278c96b1524564c3caf6b1979dc769acf7e8d7  /root/qemu-8.2.4/build/qemu-arm
+boot probe at main entry plus guest syscall trace to the shared log directory

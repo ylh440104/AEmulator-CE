@@ -54,6 +54,7 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
+        if (img.api < 10) cmd += listOf("-d", "strace", "-D", "/storage/emulated/0/AEmulatorCE/senses-strace.log")
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
             if (qemuStrace) cmd += "-strace"
