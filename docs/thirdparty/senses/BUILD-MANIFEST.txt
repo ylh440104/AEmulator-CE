@@ -1,2 +1,2 @@
-9633ef8e1bae3fa8540d0dc0efd18a02354693ab8549f2cd76865d9fe9fda10d  /root/qemu-8.2.4/build/qemu-arm
-plus local change: guest personality() is emulated in-process and never forwarded to the host (Android app seccomp returns SIGSYS for personality(PER_LINUX32))
+d1864e3f6f73abf7290213691f11d5a7d324d70da7487dff7ecb951bba60552a  /root/qemu-8.2.4/build/qemu-arm
+guest personality() fully emulated: no host personality() call at all, not even a query — the phone sandbox kills the syscall with SIGSYS
