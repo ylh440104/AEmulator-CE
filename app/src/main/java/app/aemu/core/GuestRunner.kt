@@ -34,7 +34,7 @@ class GuestRunner(
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
     val qemu: File get() = paths.nativeBin(when {
         engine == Engine.N64 -> kernel.runner
-        engine == Engine.KK && img.api < 10 -> "libqemu_kk_rie.so"
+        engine == Engine.KK && img.api < 10 -> "libqemu_senses.so"
         else -> engine.qemu
     })
     val runner: File get() = paths.nativeBin(engine.runner)
@@ -193,6 +193,21 @@ class GuestRunner(
         // a SIGSEGV right after ARMAssembler reports the generated scanline (a periodic flush is not enough:
         // the write and the jump happen inside one interval)
         if (img.api < 10) { e["DHD_NO_SMC"] = "1"; e["DHD_TBFLUSH"] = "0" }
+        if (img.api < 10) {
+            for ((d, g) in mapOf(
+                "DHD_FB_W" to "GUEST_FB_W", "DHD_FB_H" to "GUEST_FB_H",
+                "DHD_IN_W" to "GUEST_IN_W", "DHD_IN_H" to "GUEST_IN_H",
+                "DHD_FB_HZ" to "GUEST_FB_HZ", "DHD_OWNERS" to "GUEST_OWNERS",
+                "DHD_NET_LOG" to "GUEST_NET_LOG", "DHD_ASHMEM_LOG" to "GUEST_ASHMEM_LOG",
+                "DHD_BINDER_LOG" to "GUEST_BINDER_LOG", "DHD_CREDS" to "GUEST_CREDS",
+                "DHD_SDCARD" to "GUEST_SDCARD", "DHD_INPUT_ST" to "GUEST_INPUT_ST",
+                "DHD_BINDER_VERBOSE" to "GUEST_BINDER_VERBOSE", "DHD_NO_SMC" to "GUEST_NO_SMC",
+                "DHD_TBFLUSH" to "GUEST_TBFLUSH", "DHD_NO_TCGOPT" to "GUEST_NO_TCGOPT",
+                "DHD_DNS53" to "GUEST_DNS53"
+            )) e[d]?.let { e[g] = it }
+            e["GUEST_BINDER"] = e["DHD_BINDER"]
+            e["GUEST_INPUT"] = e["DHD_INPUT"]
+        }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)
         return e

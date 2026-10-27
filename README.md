@@ -59,6 +59,7 @@ cd AEmulator-CE
 GPL-3.0，与原项目一致。见 [LICENSE](LICENSE)。
 
 ## 致谢
-
 原始项目：[uxazu/AEmulator](https://github.com/uxazu/AEmulator)
 更早的源头：[SENSES](https://github.com/Istratii-tech/SENSES)
+
+1.x–2.2（API ≤ 9）固件的翻译器来自 SENSES 源码构建：QEMU 8.2.4 + 全部 101 个补丁，含 READ_IMPLIES_EXEC（无 PT_GNU_STACK 的老程序可读即可执行）与 SMC 检测修复。本仓库携带其 NOTICE、COPYING、构建记录和 sha256，见 docs/thirdparty/senses/。其余版本（API ≥ 10）沿用上游 libqemu_kk.so。
