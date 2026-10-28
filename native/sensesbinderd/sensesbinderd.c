@@ -454,6 +454,34 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
 
 static void proc_release(struct proc *p);
 
+/**
+ * Read one String16 out of a binder parcel and copy it into out as plain ASCII.
+ * A servicemanager call carries its interface descriptor first and the name it refers to second, so
+ * callers pass index 1 for the interesting one.
+ */
+static int parcel_string(const char *data, u64 size, int index, char *out, size_t cap) {
+    u64 off = 0;
+    for (int k = 0; k <= index; k++) {
+        if (off + 4 > size) return 0;
+        u32 len;
+        memcpy(&len, data + off, 4);
+        if (len > 512 || off + 4 + (u64)len * 2 > size) return 0;
+        if (k == index) {
+            size_t i;
+            for (i = 0; i < len && i + 1 < cap; i++) {
+                u16 ch;
+                memcpy(&ch, data + off + 4 + i * 2, 2);
+                out[i] = (ch >= 32 && ch < 127) ? (char)ch : '?';
+            }
+            out[i] = 0;
+            return 1;
+        }
+        off += 4 + (u64)len * 2;
+        off = (off + 3) & ~3ULL;
+    }
+    return 0;
+}
+
 static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int *fds, int nfds, int reply) {
     struct proc *p = th->proc;
     struct txn *t = zalloc(sizeof *t);
@@ -503,8 +531,20 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         to = n->owner;
     }
     t->to_proc = to;
-    if (!reply) V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
-                  p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
+    if (!reply) {
+        // For a servicemanager call the interesting part is which service is being registered or
+        // looked up: without that, "code 1" and "code 2" are indistinguishable from each other and
+        // there was no way to tell whether SurfaceFlinger ever announced itself.
+        char name[72];
+        if (m->handle == 0 && (m->code == 1 || m->code == 2 || m->code == 3) &&
+            parcel_string(t->data, t->data_size, 1, name, sizeof name))
+            V("txn pid %d -> pid %d handle %u code %u \"%s\" flags %#x data %llu",
+              p->pid, to->pid, m->handle, m->code, name, m->flags,
+              (unsigned long long)m->data_size);
+        else
+            V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
+              p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
+    }
     if (translate(th, to, t, t->data) < 0) {
         V("   !! translate failed for code %u", m->code);
         sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return;
@@ -703,6 +743,14 @@ static void deliver(struct thread *th) {
             p->bufs = b;
         }
         u32 more_flag = (th->todo.head || p->todo.head) ? SB_F_MORE : 0;
+        // A 4-byte reply to a servicemanager call is the int32 result: zero means the service was
+        // added or found, anything else means it was refused. Printing it is the only way to tell
+        // "registered" apart from "already there", which the guest log words identically.
+        if (t->reply && t->data_size == 4 && t->code == 0) {
+            int res;
+            memcpy(&res, t->data, 4);
+            V("   reply result for pid %d: %d", p->pid, res);
+        }
         V("   send %s to pid %d/%d fd %d: %u bytes, more=%u",
           t->reply ? "reply" : "txn", p->pid, th->tid, th->fd,
           (u32)(sizeof m + total), more_flag);
