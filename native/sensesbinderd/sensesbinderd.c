@@ -365,7 +365,7 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     if (reply) {
         in_reply_to = th->stack;
         V("   reply from pid %d: stack=%s", p->pid, in_reply_to ? "yes" : "EMPTY");
-        if (!in_reply_to) { txn_free(t); return; }
+        if (!in_reply_to) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
         th->stack = in_reply_to->from_parent;
         target_thread = in_reply_to->from;
         if (!target_thread) { txn_free(t); txn_free(in_reply_to); return; }
@@ -374,14 +374,14 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         struct node *n;
         if (m->handle) { struct ref *r = ref_get(p, m->handle); n = r ? r->node : 0; }
         else n = ctx_mgr;
-        if (!n || !n->owner) { txn_free(t); return; }
+        if (!n || !n->owner) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
         t->target = n;
         to = n->owner;
     }
     t->to_proc = to;
     if (!reply) V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
                   p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
-    if (translate(th, to, t, t->data) < 0) { txn_free(t); return; }
+    if (translate(th, to, t, t->data) < 0) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
     if (t->target) {
         t->target->local_strong++;
         node_work(t->target);
