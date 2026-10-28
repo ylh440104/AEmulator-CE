@@ -310,6 +310,31 @@ static int wr_all(int fd, const void *buf, size_t len);
  * is unreachable: the daemon only ever wrote to threads parked in SB_WAIT, so a transaction
  * addressed to such a process sat in the queue and the sender waited forever.
  */
+/**
+ * Ask a process to start another binder thread, the way the real driver does when it runs out of
+ * idle ones (BR_SPAWN_LOOPER). A process that has one worker thread and lost it — or whose only
+ * worker is stuck in a call of its own — otherwise keeps a queued transaction forever with nobody
+ * able to pick it up.
+ */
+static void ask_for_thread(struct proc *p) {
+    if (!p->pump || p->pump->fd < 0) return;
+    if (p->requested - p->started > 0) return;      // already asked, still waiting for it to come up
+    if (p->started >= p->max_threads) return;
+    p->requested++;
+    struct sb_hdr h;
+    memset(&h, 0, sizeof h);
+    h.len = sizeof h;
+    h.type = SB_R_SPAWN;
+    h.tid = (u32)p->pump->tid;
+    h.flags = SB_F_MAGIC;
+    V("   ask pid %d for another binder thread (%d/%d)", p->pid, p->started, p->max_threads);
+    if (wr_all(p->pump->fd, &h, sizeof h) < 0) {
+        p->requested--;
+        p->pump->fd = -1;
+        p->pump = 0;
+    }
+}
+
 static void wake_proc(struct proc *p) {
     if (!p->pump || p->pump->fd < 0) return;
     struct sb_hdr h;
@@ -336,7 +361,10 @@ static void kick_proc(struct proc *p) {
     // main thread only runs a frame loop (surfaceflinger) never blocks in ioctl, so writing to a
     // thread is not an option — the alarm thread turns this into POLLIN on the guest's binder
     // descriptor and the guest comes to collect the transaction itself.
-    if (p->todo.head) wake_proc(p);
+    if (p->todo.head) {
+        ask_for_thread(p);
+        wake_proc(p);
+    }
     // Only a thread that said SB_WAIT is reading the socket. A thread that merely opened a connection
     // and never waited is not: whatever lands on it sits in the buffer and nothing consumes it. That
     // is how the third lookup went to servicemanager's second connection (tid 943) while its main
@@ -833,6 +861,12 @@ static void on_message(struct thread *th) {
         // the frame loop.
         th->is_pump = m2->first == 2;
         if (th->is_pump) { p->pump = th; V("pid %d has an alarm thread (tid %d)", p->pid, th->tid); }
+        else if (!th->is_main) {
+            // count the workers the guest actually brought up, so ask_for_thread() knows whether
+            // the request it sent is still outstanding
+            if (p->started < p->requested) p->started++;
+            if (p->started < 1) p->started = 1;
+        } else if (p->started < 1) p->started = 1;
         th->iseq = h.tid;
         th->next = p->threads;
         p->threads = th;
