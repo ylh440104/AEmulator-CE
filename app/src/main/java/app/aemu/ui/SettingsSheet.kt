@@ -148,6 +148,9 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             Toggle(stringResource(R.string.vs_awake), stringResource(R.string.vs_awake_sub), s.keepScreenOn) { s = s.copy(keepScreenOn = it) }
             Toggle(stringResource(R.string.as_led), stringResource(R.string.as_led_sub), s.showLed) { s = s.copy(showLed = it) }
             Toggle(stringResource(R.string.vs_single), stringResource(R.string.vs_single_sub), s.mtMode == 4) { s = s.copy(mtMode = if (it) 4 else 0) }
+            Spacer(Modifier.height(16.dp))
+            Text(stringResource(R.string.vs_debug), style = MaterialTheme.typography.titleMedium)
+            Toggle(stringResource(R.string.vs_verbose), stringResource(R.string.vs_verbose_sub), s.verboseLog) { s = s.copy(verboseLog = it) }
 
             Spacer(Modifier.height(16.dp))
             Button(onClick = { onSave(s) }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.save)) }

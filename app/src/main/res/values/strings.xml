@@ -208,6 +208,9 @@
     <string name="m_vnc">Start VNC server</string>
     <string name="m_vnc_stop">Stop VNC server</string>
     <string name="m_vnc_started">VNC: %1$s, password %2$s</string>
+    <string name="vs_debug">Diagnostics</string>
+    <string name="vs_verbose">Full log</string>
+    <string name="vs_verbose_sub">Write the translator log, the binder transactions and the guest syscalls to the export folder. Slower; turn on when something misbehaves.</string>
     <string name="as_led">Notification light</string>
     <string name="as_led_sub">Show the guest phone’s LED above its screen</string>
     <string name="exec_choice_title">How should this system run?</string>

@@ -32,6 +32,8 @@ data class VmSettings(
     val keepScreenOn: Boolean = true,
     /** the guest phone's notification LED drawn above its screen */
     val showLed: Boolean = true,
+    /** full diagnostics: the translator's own log, the binder daemon's transactions, the guest syscalls */
+    val verboseLog: Boolean = false,
     val mtMode: Int = 0,
     /** старый движок для 2.x (GL через pbuffer, только GLES 1.x) — запасной вариант */
     val legacyEngine: Boolean = false,

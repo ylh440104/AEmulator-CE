@@ -18,6 +18,8 @@ class GuestRunner(
 
     var qemuLog = false
     var qemuStrace = false
+    /** the firmware setting: the translator and the binder daemon write their full diagnostics */
+    var verboseLog = false
     var tbFlush = 0
     var noSmc = false
     var noTcgOpt = false
@@ -57,7 +59,7 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
-        if (img.api < 4) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
+        if (img.api < 10 && verboseLog) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
             if (qemuStrace) cmd += "-strace"
