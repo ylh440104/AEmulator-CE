@@ -795,6 +795,21 @@ static void on_message(struct thread *th) {
               h.type == SB_REPLY ? "reply" : "transact",
               th->proc ? th->proc->pid : 0, th->tid, tx->handle, tx->code,
               (unsigned long long)tx->data_size);
+            if (blen > sizeof(*tx) && tx->data_size >= 8) {
+                // the Parcel of a servicemanager call: [len][name16]; the name is what the caller wants
+                const u8 *d = (const u8 *)rxbuf + sizeof(*tx);
+                u32 slen = 0;
+                memcpy(&slen, d, 4);
+                if (slen > 0 && slen < 64 && 4 + slen * 2 <= tx->data_size && slen * 2 + 4 <= blen - sizeof(*tx)) {
+                    char nm[128]; u32 i;
+                    for (i = 0; i < slen && i < 60; i++) {
+                        u16 ch; memcpy(&ch, d + 4 + i * 2, 2);
+                        nm[i] = (ch < 128 && ch >= 32) ? (char)ch : '?';
+                    }
+                    nm[i] = 0;
+                    V("   wants \"%s\"", nm);
+                }
+            }
             do_transact(th, tx, (char *)rxbuf + sizeof(struct sb_txn), fds, nfds, h.type == SB_REPLY);
         }
         nfds = 0;
