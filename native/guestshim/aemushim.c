@@ -1257,3 +1257,42 @@ EXPORT int timerfd_create(int clock, int flags) {
     long r = sys3(350 /* timerfd_create */, clock, flags, 0);
     return r < 0 ? fail(r) : (int)r;
 }
+
+/* ------------------------------------------------------------------ READ_IMPLIES_EXEC
+ * Android 1.x binaries carry no PT_GNU_STACK, so the ARM kernel gives the whole process the
+ * READ_IMPLIES_EXEC personality: every readable mapping is executable, and PixelFlinger/Glide
+ * writes its generated scanline code into the ordinary heap and jumps there. The translator
+ * keeps its own page permissions and does not apply that rule, so the jump faults and
+ * system_server dies right after "ARMAssembler: generated scanline". Add PROT_EXEC wherever
+ * PROT_READ is asked for, but only for the old firmwares this rule belongs to. */
+static int rie_on;
+static int rie_checked;
+static int env_flag(const char *name) {
+    extern char **environ;
+    if (!environ) return 0;
+    int n = 0;
+    while (name[n]) n++;
+    for (char **e = environ; *e; e++) {
+        int i = 0;
+        while (i < n && e[0][i] == name[i]) i++;
+        if (i == n && e[0][n] == '=') return e[0][n + 1] != '0';
+    }
+    return 0;
+}
+static int rie_prot(long prot) {
+    if (!rie_checked) { rie_on = env_flag("AEMU_RIE"); rie_checked = 1; }
+    if (rie_on && (prot & 1 /* PROT_READ */)) prot |= 4 /* PROT_EXEC */;
+    return prot;
+}
+__attribute__((naked, noinline)) static long sys6(long n, long a, long b, long c, long d, long e, long f) {
+    __asm__ volatile(
+        "push {r4, r5, r7}; mov r7, r0; mov r0, r1; mov r1, r2; mov r2, r3; ldr r3, [sp, #12]; ldr r4, [sp, #16]; ldr r5, [sp, #20]; svc #0; pop {r4, r5, r7}; bx lr");
+}
+EXPORT void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
+    long r = sys6(192 /* mmap2 */, (long)addr, (long)len, rie_prot(prot), flags, fd, off);
+    return r < 0 && r > -4096 ? (void *)fail(r) : (void *)r;
+}
+EXPORT int mprotect(void *addr, unsigned long len, int prot) {
+    long r = sys3(125 /* mprotect */, (long)addr, (long)len, rie_prot(prot));
+    return r < 0 ? fail(r) : (int)r;
+}
