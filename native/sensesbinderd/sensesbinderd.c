@@ -112,6 +112,8 @@ struct proc {
 
 static struct proc *procs;
 static struct node *ctx_mgr;
+/** the thread that made itself the context manager: lookups go to it and to nobody else */
+static struct thread *ctx_th;
 static struct thread *cur;
 static int ep, verbose;
 
@@ -294,15 +296,38 @@ static struct thread *ready_thread(struct proc *p) {
 static void kick_proc(struct proc *p) {
     struct thread *th;
     while (p->todo.head && (th = ready_thread(p))) deliver(th);
-    if (p->todo.head) for (th = p->threads; th; th = th->next) if (!th->waiting) deliver(th);
+    // Only a thread that said SB_WAIT is reading the socket. A thread that merely opened a connection
+    // and never waited is not: whatever lands on it sits in the buffer and nothing consumes it. That
+    // is how the third lookup went to servicemanager's second connection (tid 943) while its main
+    // thread (tid 921) sat waiting on the first, and the whole boot stopped there.
+    if (p->todo.head) {
+        for (th = p->threads; th; th = th->next)
+            if (!th->waiting && th->looper) { deliver(th); break; }
+    }
+}
+static struct thread *main_thread_of(struct proc *p) {
+    // the thread that became the context manager is the one that serves lookups: it is the only one
+    // whose sb_wait the daemon can answer, and picking any other member of the process leaves the
+    // transaction in a socket nobody reads
+    if (ctx_th && ctx_th->proc == p) return ctx_th;
+    for (struct thread *th = p->threads; th; th = th->next) if (th->is_main) return th;
+    for (struct thread *th = p->threads; th; th = th->next) if (th->waiting) return th;
+    return 0;
 }
 
 static void queue_txn(struct txn *t, struct thread *target) {
     struct work *w = mkwork(W_TXN);
     w->t = t;
-    if (target) { wq_push(&target->todo, w); deliver(target); }
-    else { wq_push(&t->to_proc->todo, w); kick_proc(t->to_proc); }
-}static int translate(struct thread *th, struct proc *to, struct txn *t, char *data) {
+    if (target) { wq_push(&target->todo, w); deliver(target); return; }
+    if (t->target && t->target == ctx_mgr) {
+        struct thread *main_th = main_thread_of(t->to_proc);
+        if (main_th) { wq_push(&main_th->todo, w); deliver(main_th); return; }
+    }
+    wq_push(&t->to_proc->todo, w);
+    kick_proc(t->to_proc);
+}
+
+static int translate(struct thread *th, struct proc *to, struct txn *t, char *data) {
     u64 n = t->offsets_size / 8, *offs = (u64 *)(data + ((t->data_size + 7) & ~7UL));
     struct proc *p = th->proc;
     t->held = zalloc((n + 2) * sizeof *t->held);
@@ -750,6 +775,7 @@ static void on_message(struct thread *th) {
                 ctx_mgr->owner = p;
             }
             p->internal_ctx = 1;
+            ctx_th = th;
             V("pid %d became the context manager", p->pid);
         }
         sb_send(th, SB_R_OK, 0, 0, 0, 0, 0);
