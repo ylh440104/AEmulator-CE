@@ -354,6 +354,10 @@ static void kick_proc(struct proc *p) {
     // thread is not an option — the alarm thread turns this into POLLIN on the guest's binder
     // descriptor and the guest comes to collect the transaction itself.
     if (p->todo.head) {
+        for (struct thread *d = p->threads; d; d = d->next)
+            V("   stuck: tid %d fd %d%s waiting=%d stack=%s todo=%s", d->tid, d->fd,
+              d->is_pump ? " (alarm)" : d->is_main ? " (main)" : "",
+              d->waiting, d->stack ? "yes" : "no", d->todo.head ? "yes" : "no");
         ask_for_thread(p);
         wake_proc(p);
     }
