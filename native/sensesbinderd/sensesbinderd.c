@@ -471,7 +471,18 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         in_reply_to = th->stack;
         V("   reply from pid %d: stack=%s", p->pid, in_reply_to ? "yes" : "EMPTY");
         if (!in_reply_to) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
-        th->stack = in_reply_to->from_parent;
+        // Two frames were pushed for this call: one on the caller, when the transaction went out,
+        // and one on whoever received it, when it was handed over. Only the receiver's frame was
+        // being popped here, and with the caller's parent pointer on top of that, so every call
+        // left a frame behind on the caller and the thread never counted as idle again. Pop both,
+        // each against its own parent.
+        th->stack = in_reply_to->to_parent;
+        if (in_reply_to->from && in_reply_to->from != th)
+            in_reply_to->from->stack = in_reply_to->from_parent;
+        V("   stack pop on tid %d: txn %p code %u (now %s), caller tid %d now %s",
+          th->tid, (void *)in_reply_to, in_reply_to->code, th->stack ? "non-empty" : "empty",
+          in_reply_to->from ? in_reply_to->from->tid : -1,
+          (in_reply_to->from && in_reply_to->from->stack) ? "non-empty" : "empty");
         target_thread = in_reply_to->from;
         if (!target_thread) { txn_free(t); txn_free(in_reply_to); return; }
         to = target_thread->proc;
@@ -504,6 +515,9 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         t->from = th;
         t->from_parent = th->stack;
         th->stack = t;
+        V("   stack push on tid %d: txn %p code %u from pid %d (depth %d)",
+          th->tid, (void *)t, t->code, p->pid,
+          th->stack->from_parent ? 2 : 1);
     }
     // the sender is told that its message was taken in, so it can leave the ioctl and free the parcel.
     // The guest counts one acceptance for every command it writes — a transaction and a reply alike
@@ -695,6 +709,8 @@ static void deliver(struct thread *th) {
             t->to_parent = th->stack;
             t->to_thread = th;
             th->stack = t;
+            V("   stack push on tid %d: txn %p code %u for receiver (depth %d)",
+              th->tid, (void *)t, t->code, t->to_parent ? 2 : 1);
             if (t->fds) { for (int i = 0; i < t->nfds; i++) close(t->fds[i]); free(t->fds); t->fds = 0; t->nfds = 0; }
             free(t->data);
             t->data = 0;
