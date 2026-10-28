@@ -465,6 +465,7 @@ static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, cons
 static void deliver(struct thread *th) {
     if (!deliverable(th)) return;
     struct proc *p = th->proc;
+    th->waiting = 0;
 
     struct node *nodework[16];
     int nnodes = 0;
