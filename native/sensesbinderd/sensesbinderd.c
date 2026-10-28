@@ -552,7 +552,8 @@ static void deliver(struct thread *th) {
             p->bufs = b;
         }
         if (sb_send(th, t->reply ? SB_R_REPLY : SB_R_TRANSACTION, buf,
-                    (u32)(sizeof m + total), t->fds, t->nfds, 0) < 0)
+                    (u32)(sizeof m + total), t->fds, t->nfds,
+                    (th->todo.head || p->todo.head) ? SB_F_MORE : 0) < 0)
             V("!! send to pid %d failed: %s", p->pid, strerror(errno));
         free(buf);
         if (t->need_reply) {
