@@ -36,10 +36,11 @@ class GuestRunner(
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
     val qemu: File get() = paths.nativeBin(when {
         engine == Engine.N64 -> kernel.runner
-        // 1.x: the engine qemu cannot execute the PixelFlinger/Glide generated code, because those
-        // binaries carry no PT_GNU_STACK and the kernel therefore let them run any readable page.
-        // The SENSES build implements exactly that rule (target_set_read_implies_exec in mmap.c).
-        engine == Engine.KK && img.api < 10 -> "libqemu_senses.so"
+        // 1.x only: those binaries carry no PT_GNU_STACK, the kernel let them run any readable page, and
+        // the SENSES build is the one that implements that rule (target_set_read_implies_exec in mmap.c).
+        // 2.x runs fine on the engine's own qemu and must stay there: the SENSES translator has no
+        // ashmem/binder fallbacks those builds need, and a 2.2 image dies with signal 11 on it.
+        engine == Engine.KK && img.api < 4 -> "libqemu_senses.so"
         else -> engine.qemu
     })
     val runner: File get() = paths.nativeBin(engine.runner)
@@ -59,7 +60,7 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
-        if (img.api < 10 && verboseLog) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
+        if (img.api < 4 && verboseLog) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
             if (qemuStrace) cmd += "-strace"
@@ -160,7 +161,7 @@ class GuestRunner(
         e["AEMU_RO_SYSTEM"] = "1"
         // 1.x binaries have no PT_GNU_STACK: the ARM kernel let them execute any readable page, and the
         // Glide/PixelFlinger assembler relies on it. The shim turns that rule on for this firmware only.
-        if (img.api < 10) e["DHD_ENV_AEMU_RIE"] = "1"
+        if (img.api < 4) e["DHD_ENV_AEMU_RIE"] = "1"
         // libaemushim serves /proc/meminfo scaled to this budget instead of the phone's own memory
         e["AEMU_RAM_KB"] = (guestRamMb(img.api, s.ramMb) * 1024L).toString()
         e["HOME"] = "/data"
@@ -201,7 +202,7 @@ class GuestRunner(
         // qemu's page-attribute SMC detection misses some of those writes on old kernels and the guest dies with
         // a SIGSEGV right after ARMAssembler reports the generated scanline (a periodic flush is not enough:
         // the write and the jump happen inside one interval)
-        if (img.api < 10) {
+        if (img.api < 4) {
             // the 1.x translator speaks the SENSES interface for the same pieces
             for ((d, g) in mapOf(
                 "DHD_FB_W" to "GUEST_FB_W", "DHD_FB_H" to "GUEST_FB_H",
