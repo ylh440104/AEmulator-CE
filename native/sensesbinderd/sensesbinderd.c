@@ -36,7 +36,7 @@ struct fbo { u32 type, flags; u32 binder; u32 cookie; };
 
 struct proc; struct thread; struct node;
 
-enum { W_TXN = 1, W_COMPLETE, W_NODE, W_DEAD_BINDER, W_CLEAR_DONE, W_ERROR, W_ACK };
+enum { W_TXN = 1, W_COMPLETE, W_NODE, W_DEAD_BINDER, W_CLEAR_DONE, W_ERROR, W_ACK, W_SPAWN };
 
 struct work { struct work *next; int type; struct txn *t; struct node *node; u64 cookie; u32 err; u32 ack_type; };
 struct wq { struct work *head, *tail; };
@@ -317,22 +317,14 @@ static int wr_all(int fd, const void *buf, size_t len);
  * able to pick it up.
  */
 static void ask_for_thread(struct proc *p) {
-    if (!p->pump || p->pump->fd < 0) return;
     if (p->requested - p->started > 0) return;      // already asked, still waiting for it to come up
     if (p->started >= p->max_threads) return;
     p->requested++;
-    struct sb_hdr h;
-    memset(&h, 0, sizeof h);
-    h.len = sizeof h;
-    h.type = SB_R_SPAWN;
-    h.tid = (u32)p->pump->tid;
-    h.flags = SB_F_MAGIC;
+    // Queue it like any other piece of work. BR_SPAWN_LOOPER only exists while libbinder reads it
+    // out of ioctl, so it has to reach a worker, not the alarm thread.
+    struct work *w = mkwork(W_SPAWN);
+    wq_push(&p->todo, w);
     V("   ask pid %d for another binder thread (%d/%d)", p->pid, p->started, p->max_threads);
-    if (wr_all(p->pump->fd, &h, sizeof h) < 0) {
-        p->requested--;
-        p->pump->fd = -1;
-        p->pump = 0;
-    }
 }
 
 static void wake_proc(struct proc *p) {
@@ -592,6 +584,7 @@ static void deliver(struct thread *th) {
     u64 dead_cookie = 0;
     int have_dead = 0, have_clear = 0;
     u32 ack = 0;
+    int have_spawn = 0;
 
     for (;;) {
         struct wq *q = th->todo.head ? &th->todo : &p->todo;
@@ -608,11 +601,19 @@ static void deliver(struct thread *th) {
         case W_DEAD_BINDER: dead_cookie = w->cookie; have_dead = 1; break;
         case W_CLEAR_DONE: dead_cookie = w->cookie; have_clear = 1; break;
         case W_TXN: t = w->t; break;
+        case W_SPAWN: have_spawn = 1; break;
         }
         free(w);
-        if (t || have_dead || have_clear || have_err) break;
+        if (t || have_dead || have_clear || have_err || have_spawn) break;
     }
 
+    if (have_spawn) {
+        // BR_SPAWN_LOOPER on the guest side: libbinder answers it by starting another pool thread
+        V("   -> pid %d/%d fd %d: spawn looper", p->pid, th->tid, th->fd);
+        sb_send(th, SB_R_SPAWN, 0, 0, 0, 0, 0);
+        kick_proc(p);
+        return;
+    }
     if (have_err) { sb_send(th, SB_R_ERROR, &err, 4, 0, 0, 0); kick_proc(p); return; }
     if (have_dead) { sb_send(th, SB_R_DEAD_BINDER, &dead_cookie, 8, 0, 0, 0); return; }
     if (have_clear) { sb_send(th, SB_R_CLEAR_DEATH_DONE, &dead_cookie, 8, 0, 0, 0); return; }
