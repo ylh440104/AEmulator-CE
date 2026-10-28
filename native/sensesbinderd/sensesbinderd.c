@@ -394,12 +394,14 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         t->from_parent = th->stack;
         th->stack = t;
     }
+    // the sender is told that its message was taken in, so it can leave the ioctl and free the parcel.
+    // The guest counts one acceptance for every command it writes — a transaction and a reply alike
+    // (guest_binder.c: t->acks++ right after the send) — and waits in SB_WAIT until the count drops.
+    // It has to leave before the transaction itself: libbinder expects the acceptance first, and a
+    // transaction that overtakes it makes the guest read its own answer as somebody else's.
+    sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
+    V("   -> pid %d: ack (%s)", p->pid, reply ? "reply" : "transact");
     queue_txn(t, target_thread);
-    // the sender is told that the transaction was taken in, so it can leave its ioctl and free the parcel:
-    // without this the guest thread sits waiting for BR_TRANSACTION_COMPLETE forever (see SB_R_ACK).
-    // It goes out on the sender's own socket and nothing else rides along: an acceptance that lands on
-    // another thread leaves that one waiting for an answer that never comes.
-    if (!reply) sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
     if (reply && in_reply_to) { in_reply_to->from = 0; txn_free(in_reply_to); }
 }
 
@@ -521,7 +523,7 @@ static void deliver(struct thread *th) {
         node_free_if_unused(nodework[i]);
     }
 
-    if (ack) { V("   -> pid %d: %u ack", p->pid, ack); sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); }
+    if (ack) { V("   -> pid %d: %u ack (queued)", p->pid, ack); sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); }
 
     if (t) {
         struct sb_txn m;
