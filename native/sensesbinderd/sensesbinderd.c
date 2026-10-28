@@ -400,7 +400,7 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     // It has to leave before the transaction itself: libbinder expects the acceptance first, and a
     // transaction that overtakes it makes the guest read its own answer as somebody else's.
     sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
-    V("   -> pid %d: ack (%s)", p->pid, reply ? "reply" : "transact");
+    V("   -> pid %d/%d fd %d: ack (%s)", p->pid, th->tid, th->fd, reply ? "reply" : "transact");
     queue_txn(t, target_thread);
     if (reply && in_reply_to) { in_reply_to->from = 0; txn_free(in_reply_to); }
 }
@@ -761,9 +761,9 @@ static void on_message(struct thread *th) {
     case SB_REPLY:
         if (blen >= sizeof(struct sb_txn)) {
             struct sb_txn *tx = (struct sb_txn *)rxbuf;
-            V(">> %s pid %d handle %u code %u data %llu",
+            V(">> %s pid %d/%d handle %u code %u data %llu",
               h.type == SB_REPLY ? "reply" : "transact",
-              th->proc ? th->proc->pid : 0, tx->handle, tx->code,
+              th->proc ? th->proc->pid : 0, th->tid, tx->handle, tx->code,
               (unsigned long long)tx->data_size);
             do_transact(th, tx, (char *)rxbuf + sizeof(struct sb_txn), fds, nfds, h.type == SB_REPLY);
         }
