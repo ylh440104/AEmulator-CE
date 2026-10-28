@@ -247,6 +247,8 @@ static struct ref *ref_get(struct proc *p, u32 desc) {
 static void ref_delete(struct ref *r) {
     if (!r->node) return;
     struct node *n = r->node;
+    V("   ref drop pid %d desc %u -> node %p of pid %d",
+      r->proc ? r->proc->pid : 0, r->desc, (void *)n, n->owner ? n->owner->pid : 0);
     struct ref **pp = &n->refs;
     while (*pp) { if (*pp == r) { *pp = r->next_in_node; break; } pp = &(*pp)->next_in_node; }
     n->nrefs--;
@@ -591,7 +593,13 @@ static void deliver(struct thread *th) {
         u8 *buf = malloc(sizeof m + (size_t)total + 8);
         memcpy(buf, &m, sizeof m);
         if (total) memcpy(buf + sizeof m, t->data, (size_t)total);
-        if (t->target) {
+        // Everything the translation handed to the receiver has to outlive this message: the guest
+        // owns those references now and gives them back through BC_FREE_BUFFER. A reply carries
+        // objects too (that is how a lookup returns a binder), and it has no target node, so keying
+        // this off t->target meant a reply's references were dropped the instant it was sent — the
+        // receiver got a handle that no longer resolved. Keep the whole buffer alive for the guest
+        // whenever the message carried anything, and let txn_free handle only what is left.
+        if (t->nheld || t->nfds || t->target) {
             struct dbuf *b = zalloc(sizeof *b);
             b->proc = p;
             b->held = t->held;
