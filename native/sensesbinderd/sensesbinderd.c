@@ -438,7 +438,12 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             break;
         }
         case T_FD:
+            // The guest sends the raw descriptor here, but the receiver is told a position in the
+            // SCM_RIGHTS array that travels with the message: guest_binder.c reads it back as
+            // fds[fo->handle]. Leaving the raw number in place made every lookup miss and every
+            // heap come back as -1, which is what killed system_server on its first IMemoryHeap.
             if (fdi >= t->nfds) return -1;
+            o->binder = (u32)fdi;
             fdi++;
             break;
         default: return -1;
