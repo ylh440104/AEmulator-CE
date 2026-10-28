@@ -32,7 +32,14 @@ class GuestRunner(
 
     val engine: Engine get() = img.engine
     val kernel: Kernel64 get() = Kernel64.forApi(img.api)
-    val qemu: File get() = paths.nativeBin(if (engine == Engine.N64) kernel.runner else engine.qemu)
+    val qemu: File get() = paths.nativeBin(when {
+        engine == Engine.N64 -> kernel.runner
+        // 1.x: the engine qemu cannot execute the PixelFlinger/Glide generated code, because those
+        // binaries carry no PT_GNU_STACK and the kernel therefore let them run any readable page.
+        // The SENSES build implements exactly that rule (target_set_read_implies_exec in mmap.c).
+        engine == Engine.KK && img.api < 10 -> "libqemu_senses.so"
+        else -> engine.qemu
+    })
     val runner: File get() = paths.nativeBin(engine.runner)
     fun cmdline(argv: List<String>, propsFile: File? = null): List<String> {
         val prog = argv.first()
@@ -50,7 +57,6 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
-        if (img.api < 10) cmd += "-one-insn-per-tb"
         if (img.api < 4) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
@@ -193,7 +199,20 @@ class GuestRunner(
         // qemu's page-attribute SMC detection misses some of those writes on old kernels and the guest dies with
         // a SIGSEGV right after ARMAssembler reports the generated scanline (a periodic flush is not enough:
         // the write and the jump happen inside one interval)
-        if (img.api < 10) { e["DHD_NO_SMC"] = "1"; e["DHD_TBFLUSH"] = "0" }
+        if (img.api < 10) {
+            // the 1.x translator speaks the SENSES interface for the same pieces
+            for ((d, g) in mapOf(
+                "DHD_FB_W" to "GUEST_FB_W", "DHD_FB_H" to "GUEST_FB_H",
+                "DHD_IN_W" to "GUEST_IN_W", "DHD_IN_H" to "GUEST_IN_H",
+                "DHD_FB_HZ" to "GUEST_FB_HZ", "DHD_OWNERS" to "GUEST_OWNERS",
+                "DHD_NET_LOG" to "GUEST_NET_LOG", "DHD_ASHMEM_LOG" to "GUEST_ASHMEM_LOG",
+                "DHD_BINDER_LOG" to "GUEST_BINDER_LOG", "DHD_CREDS" to "GUEST_CREDS",
+                "DHD_SDCARD" to "GUEST_SDCARD", "DHD_INPUT_ST" to "GUEST_INPUT_ST",
+                "DHD_BINDER_VERBOSE" to "GUEST_BINDER_VERBOSE", "DHD_DNS53" to "GUEST_DNS53"
+            )) e[d]?.let { e[g] = it }
+            e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
+            e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }
+        }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)
         return e
