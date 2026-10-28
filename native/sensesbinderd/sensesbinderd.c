@@ -530,7 +530,11 @@ static int emit_node(struct node *n, u32 *br) {
 }
 
 static int deliverable(struct thread *th) {
-    return th->todo.head || (!th->stack && th->proc->todo.head);
+    // A reply addressed to this thread carries the answer to the call sitting on its stack: the
+    // stack is expected to be non-empty, and refusing it there was what kept every reply undelivered
+    // and every stack uncleared. Work from the shared queue still needs an idle thread.
+    if (th->todo.head) return 1;
+    return !th->stack && th->proc->todo.head;
 }static int wr_all(int fd, const void *buf, size_t len) {
     const char *p = buf;
     while (len) {
