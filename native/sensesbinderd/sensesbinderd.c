@@ -29,7 +29,10 @@ typedef unsigned char u8;
 #define T_FDA           0x66646185u
 #define T_PTR           0x70742a85u
 
-struct fbo { u32 type, flags; u64 binder, cookie; };
+// The guest is 32-bit, so this is 16 bytes, not 24: binder_uintptr_t is a uint32_t there, and
+// both binder/handle and cookie are four bytes each. inflating it made every offset check fail
+// on the last object of a parcel and swallowed the whole transaction.
+struct fbo { u32 type, flags; u32 binder; u32 cookie; };
 
 struct proc; struct thread; struct node;
 
@@ -328,16 +331,20 @@ static void queue_txn(struct txn *t, struct thread *target) {
 }
 
 static int translate(struct thread *th, struct proc *to, struct txn *t, char *data) {
-    u64 n = t->offsets_size / 8, *offs = (u64 *)(data + ((t->data_size + 7) & ~7UL));
+    // offsets_size counts bytes, and the guest's binder_size_t is four bytes wide, so the table is a
+// run of uint32_t. reading it as uint64_t doubled every step and pointed at the wrong place in
+// the parcel, which is how the last object always came out out-of-bounds.
+    u64 n = t->offsets_size / 4;
+    const u32 *offs = (const u32 *)(data + t->data_size);
     struct proc *p = th->proc;
     t->held = zalloc((n + 2) * sizeof *t->held);
     int fdi = 0;
-    if (n) V("   translate code %u: %llu offsets, data %llu, words %llu/%llu", t->code,
+    if (n) V("   translate code %u: %llu offsets, data %llu, at %u/%u", t->code,
              (unsigned long long)n, (unsigned long long)t->data_size,
-             (unsigned long long)offs[0], n > 1 ? (unsigned long long)offs[1] : 0ULL);
+             offs[0], n > 1 ? offs[1] : 0u);
     for (u64 i = 0; i < n; i++) {
-        if (offs[i] + sizeof(struct fbo) > t->data_size) {
-            V("   !! offset %llu out of %llu", (unsigned long long)offs[i], (unsigned long long)t->data_size);
+        if ((u64)offs[i] + sizeof(struct fbo) > t->data_size) {
+            V("   !! offset %u out of %llu", offs[i], (unsigned long long)t->data_size);
             return -1;
         }
         struct fbo *o = (struct fbo *)(data + offs[i]);
@@ -347,20 +354,20 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct node *nd = node_get(p, o->binder, o->cookie, 1);
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
-            o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = r->desc; o->cookie = 0;
+            o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
         }
         case T_HANDLE: case T_WEAK_HANDLE: {
-            struct ref *r = ref_get(p, (u32)o->binder);
+            struct ref *r = ref_get(p, o->binder);
             int strong = o->type == T_HANDLE;
             if (!r) return -1;
             if (r->node->owner == to) {
-                o->type = strong ? T_BINDER : T_WEAK_BINDER; o->binder = r->node->ptr; o->cookie = r->node->cookie;
+                o->type = strong ? T_BINDER : T_WEAK_BINDER; o->binder = (u32)r->node->ptr; o->cookie = (u32)r->node->cookie;
                 if (strong) { r->node->local_strong++; node_work(r->node); h->node = r->node; h->strong = 1; t->nheld++; }
             } else {
                 struct ref *nr = ref_for_node(to, r->node);
-                o->binder = nr->desc; o->cookie = 0;
+                o->binder = (u32)nr->desc; o->cookie = 0;
                 ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
             }
             break;
