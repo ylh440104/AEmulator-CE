@@ -89,7 +89,7 @@ struct txn {
 };
 
 struct thread {
-    int fd, tid, is_main, waiting, nonblock, looper, woken;
+    int fd, tid, is_main, is_pump, waiting, nonblock, looper, woken;
     u32 read_size;
     struct proc *proc;
     struct wq todo;
@@ -105,6 +105,8 @@ struct proc {
     int internal_ctx;
     u32 key;
     struct thread *threads;
+    /** the guest's alarm thread, if it started one: the only way to reach a process that waits in poll */
+    struct thread *pump;
     struct wq todo;
     struct ref **refs;
     u32 nrefs;
@@ -294,13 +296,47 @@ static void txn_free(struct txn *t) {
 
 static struct thread *ready_thread(struct proc *p) {
     for (struct thread *th = p->threads; th; th = th->next)
-        if (th->waiting && !th->stack && !th->todo.head) return th;
+        if (th->waiting && !th->is_pump && !th->stack && !th->todo.head) return th;
     return 0;
+}
+static int wr_all(int fd, const void *buf, size_t len);
+
+/**
+ * Tell a process that work is waiting. guest_binder.c keeps one connection per process whose only
+ * job is to receive this nudge and write a byte into the socket pair behind the guest's binder
+ * descriptor; the guest sees POLLIN and comes into ioctl to collect the transaction itself.
+ *
+ * Without it a process that waits in poll — surfaceflinger's frame loop, anything built on Looper —
+ * is unreachable: the daemon only ever wrote to threads parked in SB_WAIT, so a transaction
+ * addressed to such a process sat in the queue and the sender waited forever.
+ */
+static void wake_proc(struct proc *p) {
+    if (!p->pump || p->pump->fd < 0) return;
+    struct sb_hdr h;
+    memset(&h, 0, sizeof h);
+    h.len = sizeof h;
+    // the alarm thread does not look at the type, it just needs a well-formed header to know it is
+    // a real message and not a desynchronised stream
+    h.type = SB_R_OK;
+    h.tid = (u32)p->pump->tid;
+    h.flags = SB_F_MAGIC;
+    V("   wake pid %d (alarm tid %d fd %d)", p->pid, p->pump->tid, p->pump->fd);
+    if (wr_all(p->pump->fd, &h, sizeof h) < 0) {
+        V("!! could not wake pid %d: %s", p->pid, strerror(errno));
+        if (p->pump->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, p->pump->fd, 0); close(p->pump->fd); }
+        p->pump->fd = -1;
+        p->pump = 0;
+    }
 }
 
 static void kick_proc(struct proc *p) {
     struct thread *th;
     while (p->todo.head && (th = ready_thread(p))) deliver(th);
+    // Nothing parked in SB_WAIT and the queue is still not empty: ring the alarm. A process whose
+    // main thread only runs a frame loop (surfaceflinger) never blocks in ioctl, so writing to a
+    // thread is not an option — the alarm thread turns this into POLLIN on the guest's binder
+    // descriptor and the guest comes to collect the transaction itself.
+    if (p->todo.head) wake_proc(p);
     // Only a thread that said SB_WAIT is reading the socket. A thread that merely opened a connection
     // and never waited is not: whatever lands on it sits in the buffer and nothing consumes it. That
     // is how the third lookup went to servicemanager's second connection (tid 943) while its main
@@ -790,6 +826,13 @@ static void on_message(struct thread *th) {
         th->proc = p;
         th->tid = (int)h.tid;
         th->is_main = m2->first == 1;
+        // first == 2 is the guest's alarm thread: it never carries work itself, it exists so the
+        // daemon has somewhere to say "there is something for you". Every process that waits in
+        // poll instead of a blocking ioctl needs one, otherwise transactions pile up in the queue
+        // forever — which is exactly what happened to surfaceflinger, whose main thread only runs
+        // the frame loop.
+        th->is_pump = m2->first == 2;
+        if (th->is_pump) { p->pump = th; V("pid %d has an alarm thread (tid %d)", p->pid, th->tid); }
         th->iseq = h.tid;
         th->next = p->threads;
         p->threads = th;
