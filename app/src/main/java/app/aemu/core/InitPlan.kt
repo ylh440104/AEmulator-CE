@@ -117,7 +117,7 @@ object InitPlan {
         Rule("servicemanager", delayMs = 1500),
         Rule("hwservicemanager", delayMs = 800, minApi = 26),
         Rule("vndservicemanager", delayMs = 500, minApi = 26),
-        Rule("surfaceflinger", delayMs = 2000, minApi = 14),
+        Rule("surfaceflinger", delayMs = 2000),
         Rule("healthd", delayMs = 500, minApi = 19),
         Rule("keystore", delayMs = 300),
         Rule("installd", waitSocket = "installd"),
@@ -223,7 +223,8 @@ object InitPlan {
             GuestService("hwservicemanager", listOf("/system/bin/hwservicemanager"), mapOf("hwservicemanager" to "0660")) else null
         "vndservicemanager" -> if (File(root, "system/bin/vndservicemanager").isFile)
             GuestService("vndservicemanager", listOf("/system/bin/vndservicemanager", "/dev/vndbinder")) else null
-        "surfaceflinger" -> if (api >= 14) GuestService("surfaceflinger", listOf("/system/bin/surfaceflinger")) else null
+        "surfaceflinger" -> if (File(root, "system/bin/surfaceflinger").isFile)
+            GuestService("surfaceflinger", listOf("/system/bin/surfaceflinger")) else null
         // (8.0+: in /system, with its service line in the ramdisk's init.rc a system-only image comes without)
         "healthd" -> listOf("/sbin/healthd", "/system/bin/healthd").firstOrNull { File(root, it.drop(1)).isFile }?.let { GuestService("healthd", listOf(it)) }
         // up to 4.2 keystore serves its own control socket and exits at once without it (4.3+: binder)
