@@ -395,12 +395,10 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     }
     queue_txn(t, target_thread);
     // the sender is told that the transaction was taken in, so it can leave its ioctl and free the parcel:
-    // without this the guest thread sits waiting for BR_TRANSACTION_COMPLETE forever (see SB_R_ACK)
-    if (!reply) {
-        struct work *done = mkwork(W_ACK);
-        wq_push(&th->todo, done);
-        deliver(th);
-    }
+    // without this the guest thread sits waiting for BR_TRANSACTION_COMPLETE forever (see SB_R_ACK).
+    // It goes out on the sender's own socket and nothing else rides along: an acceptance that lands on
+    // another thread leaves that one waiting for an answer that never comes.
+    if (!reply) sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
     if (reply && in_reply_to) { in_reply_to->from = 0; txn_free(in_reply_to); }
 }
 
