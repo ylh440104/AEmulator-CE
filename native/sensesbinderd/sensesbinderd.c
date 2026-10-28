@@ -461,12 +461,51 @@ static void proc_release(struct proc *p);
  */
 static void parcel_hex(const char *data, u64 size, char *out, size_t cap) {
     static const char d[] = "0123456789abcdef";
-    size_t n = size < 48 ? (size_t)size : 48, o = 0;
+    // a servicemanager parcel starts with the interface token: a 4-byte length word plus 26 UTF-16
+// characters, which comes to 56 bytes and is already 4-aligned, so the name it refers to begins
+    // exactly at offset 56
+    size_t n = size < 128 ? (size_t)size : 128, o = 0;
     for (size_t i = 0; i < n && o + 3 < cap; i++) {
         unsigned char b = (unsigned char)data[i];
         out[o++] = d[b >> 4];
         out[o++] = d[b & 15];
         if ((i & 3) == 3 && o + 2 < cap) out[o++] = ' ';
+    }
+    out[o] = 0;
+}
+
+/**
+ * Print both things a servicemanager call carries: the interface token at offset 0 and the service
+ * name that follows it. The name is what matters — it says whether a process is registering itself
+ * or asking for somebody else, and the earlier "code 1"/"code 2" numbering said neither.
+ */
+static void parcel_dump(const char *data, u64 size, char *out, size_t cap) {
+    size_t o = 0;
+    for (int pass = 0; pass < 2 && o + 8 < cap; pass++) {
+        u64 off = 0;
+        if (pass == 1) {
+            if (size < 4) break;
+            u32 first;
+            memcpy(&first, data, 4);
+            off = 4 + (u64)first * 2;
+            off = (off + 3) & ~3ULL;
+            o += (size_t)snprintf(out + o, cap - o, " | name=");
+        } else {
+            o += (size_t)snprintf(out + o, cap - o, "token=");
+        }
+        if (off + 4 > size) { o += (size_t)snprintf(out + o, cap - o, "<short>"); break; }
+        u32 len;
+        memcpy(&len, data + off, 4);
+        if (len > 200 || off + 4 + (u64)len * 2 > size) {
+            o += (size_t)snprintf(out + o, cap - o, "<bad %u>", len);
+            continue;
+        }
+        size_t i = 0;
+        for (; i < len && o + 2 < cap; i++) {
+            u16 ch;
+            memcpy(&ch, data + off + 4 + i * 2, 2);
+            out[o++] = (ch >= 32 && ch < 127) ? (char)ch : '?';
+        }
     }
     out[o] = 0;
 }
@@ -523,11 +562,12 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     if (!reply) {
         // Every servicemanager call gets its parcel dumped. The name decoder produced an empty
         // string twice, and the only way to stop guessing at the layout is to look at the bytes.
-        char hex[160];
+        char hex[420], names[200];
         if (m->handle == 0 && m->code >= 1 && m->code <= 3) {
+            parcel_dump(t->data, t->data_size, names, sizeof names);
             parcel_hex(t->data, t->data_size, hex, sizeof hex);
-            V("txn pid %d -> pid %d handle %u code %u data %llu [%s]",
-              p->pid, to->pid, m->handle, m->code, (unsigned long long)m->data_size, hex);
+            V("txn pid %d -> pid %d handle %u code %u data %llu [%s] %s",
+              p->pid, to->pid, m->handle, m->code, (unsigned long long)m->data_size, names, hex);
         } else {
             V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
               p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
