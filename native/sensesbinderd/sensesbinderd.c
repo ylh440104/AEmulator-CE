@@ -99,6 +99,7 @@ struct thread {
 
 struct proc {
     int pid, max_threads, requested, started, kick;
+    int internal_ctx;
     u32 key;
     struct thread *threads;
     struct wq todo;
@@ -376,6 +377,8 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         to = n->owner;
     }
     t->to_proc = to;
+    if (!reply) V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
+                  p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
     if (translate(th, to, t, t->data) < 0) { txn_free(t); return; }
     if (t->target) {
         t->target->local_strong++;
@@ -721,10 +724,17 @@ static void on_message(struct thread *th) {
     case SB_SET_CTX_MGR: {
         struct proc *p = th->proc;
         if (p) {
-            struct node *n = zalloc(sizeof *n);
-            n->owner = p;
-            n->internal_strong = 1;
-            ctx_mgr = n;
+            // the context manager is reached as handle 0, so it is not a node of any client's table:
+            // it belongs to the daemon and is handed out for every transaction that names no handle
+            if (!ctx_mgr) {
+                ctx_mgr = zalloc(sizeof *ctx_mgr);
+                ctx_mgr->owner = p;
+                ctx_mgr->internal_strong = 1;
+            } else {
+                ctx_mgr->owner = p;
+            }
+            p->internal_ctx = 1;
+            V("pid %d became the context manager", p->pid);
         }
         sb_send(th, SB_R_OK, 0, 0, 0, 0, 0);
         break;
@@ -737,8 +747,14 @@ static void on_message(struct thread *th) {
     }
     case SB_TRANSACT:
     case SB_REPLY:
-        if (blen >= sizeof(struct sb_txn))
-            do_transact(th, (struct sb_txn *)rxbuf, (char *)rxbuf + sizeof(struct sb_txn), fds, nfds, h.type == SB_REPLY);
+        if (blen >= sizeof(struct sb_txn)) {
+            struct sb_txn *tx = (struct sb_txn *)rxbuf;
+            V(">> %s pid %d handle %u code %u data %llu",
+              h.type == SB_REPLY ? "reply" : "transact",
+              th->proc ? th->proc->pid : 0, tx->handle, tx->code,
+              (unsigned long long)tx->data_size);
+            do_transact(th, tx, (char *)rxbuf + sizeof(struct sb_txn), fds, nfds, h.type == SB_REPLY);
+        }
         nfds = 0;
         break;
     case SB_REF:

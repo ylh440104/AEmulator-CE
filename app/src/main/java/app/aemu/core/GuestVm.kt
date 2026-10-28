@@ -643,7 +643,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             // 1.x runs on the SENSES translator, whose /dev/binder client speaks the SB protocol;
             // the engine's binderd speaks a different one, so those two cannot meet. This daemon is
             // built from the same protocol header the translator was built with.
-            Engine.KK -> spawn("binderd", listOf(paths.nativeBin(if (img.api < 10) "libsensesbinderd.so" else engine.binderd).absolutePath, "-s", sock), emptyMap())
+            Engine.KK -> spawn("binderd", listOf(paths.nativeBin(if (img.api < 10) "libsensesbinderd.so" else engine.binderd).absolutePath, "-s", sock) +
+                if (img.api < 10) listOf("-v") else emptyList(), emptyMap())
             Engine.N64 -> {
                 val env = if (File(paths.bin, "binder.verbose").exists()) mapOf("AEMU_BINDER_VERBOSE" to "1") else emptyMap()
                 val bin = paths.nativeBin(kernel.binderd).absolutePath
