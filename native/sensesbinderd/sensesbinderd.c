@@ -813,8 +813,13 @@ static void on_message(struct thread *th) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: sensesbinderd <socket> [-v]\n"); return 2; }
-    verbose = argc > 2 && strstr(argv[2], "v");
+    const char *path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-s") && i + 1 < argc) path = argv[++i];
+        else if (!strcmp(argv[i], "-v")) verbose = 1;
+        else if (argv[i][0] != '-') path = argv[i];
+    }
+    if (!path) { fprintf(stderr, "usage: sensesbinderd -s <socket> [-v]\n"); return 2; }
     signal(SIGPIPE, SIG_IGN);
     setvbuf(stderr, 0, _IOLBF, 0);
     struct rlimit rl;
@@ -823,8 +828,8 @@ int main(int argc, char **argv) {
     struct sockaddr_un sa;
     memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
-    strncpy(sa.sun_path, argv[1], sizeof sa.sun_path - 1);
-    unlink(argv[1]);
+    strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
+    unlink(path);
     if (bind(ls, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(ls, 128) < 0) {
         perror("sensesbinderd: bind");
         return 1;
@@ -835,7 +840,7 @@ int main(int argc, char **argv) {
     ev.events = EPOLLIN;
     ev.data.ptr = 0;
     epoll_ctl(ep, EPOLL_CTL_ADD, ls, &ev);
-    logf_("sensesbinderd: listening on %s", argv[1]);
+    logf_("sensesbinderd: listening on %s", path);
     for (;;) {
         struct epoll_event evs[64];
         int n = epoll_wait(ep, evs, 64, -1);
