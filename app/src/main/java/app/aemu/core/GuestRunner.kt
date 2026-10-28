@@ -152,7 +152,7 @@ class GuestRunner(
         e["AEMU_RO_SYSTEM"] = "1"
         // 1.x binaries have no PT_GNU_STACK: the ARM kernel let them execute any readable page, and the
         // Glide/PixelFlinger assembler relies on it. The shim turns that rule on for this firmware only.
-        if (img.api < 10) e["AEMU_RIE"] = "1"
+        if (img.api < 10) e["DHD_ENV_AEMU_RIE"] = "1"
         // libaemushim serves /proc/meminfo scaled to this budget instead of the phone's own memory
         e["AEMU_RAM_KB"] = (guestRamMb(img.api, s.ramMb) * 1024L).toString()
         e["HOME"] = "/data"
