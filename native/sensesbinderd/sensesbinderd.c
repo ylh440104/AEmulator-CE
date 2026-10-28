@@ -331,20 +331,23 @@ static void queue_txn(struct txn *t, struct thread *target) {
 }
 
 static int translate(struct thread *th, struct proc *to, struct txn *t, char *data) {
-    // offsets_size counts bytes, and the guest's binder_size_t is four bytes wide, so the table is a
-// run of uint32_t. reading it as uint64_t doubled every step and pointed at the wrong place in
-// the parcel, which is how the last object always came out out-of-bounds.
-    u64 n = t->offsets_size / 4;
-    const u32 *offs = (const u32 *)(data + t->data_size);
+    // The guest's own offset table is a run of four-byte entries, but guest_binder.c widens it to
+// eight at the protocol boundary ("пересчитываем на границе", noff * 8), so inside this message
+// the entries really are uint64_t. What was wrong was never the width: it was where the table
+// starts. The table sits immediately after data_size, with no padding, and the align-to-eight
+// this code used to apply shifted the whole read by a few bytes, which made the last object of
+// every parcel look out of bounds and got the transaction dropped.
+    u64 n = t->offsets_size / 8;
+    const u64 *offs = (const u64 *)(data + t->data_size);
     struct proc *p = th->proc;
     t->held = zalloc((n + 2) * sizeof *t->held);
     int fdi = 0;
-    if (n) V("   translate code %u: %llu offsets, data %llu, at %u/%u", t->code,
+    if (n) V("   translate code %u: %llu offsets, data %llu, at %llu/%llu", t->code,
              (unsigned long long)n, (unsigned long long)t->data_size,
-             offs[0], n > 1 ? offs[1] : 0u);
+             (unsigned long long)offs[0], n > 1 ? (unsigned long long)offs[1] : 0ULL);
     for (u64 i = 0; i < n; i++) {
-        if ((u64)offs[i] + sizeof(struct fbo) > t->data_size) {
-            V("   !! offset %u out of %llu", offs[i], (unsigned long long)t->data_size);
+        if (offs[i] + sizeof(struct fbo) > t->data_size) {
+            V("   !! offset %llu out of %llu", (unsigned long long)offs[i], (unsigned long long)t->data_size);
             return -1;
         }
         struct fbo *o = (struct fbo *)(data + offs[i]);
@@ -391,7 +394,9 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     t->code = m->code; t->flags = m->flags; t->reply = reply;
     t->sender_pid = p->pid; t->sender_euid = m->sender_euid;
     t->data_size = m->data_size; t->offsets_size = m->offsets_size;
-    u64 total = ((t->data_size + 7) & ~7UL) + t->offsets_size;
+    // no padding between the parcel and its offset table: the guest writes them back to back
+    // and reads them back the same way, so rounding up here desynchronised the two sides
+    u64 total = t->data_size + t->offsets_size;
     if (total > SB_MAXMSG) { free(t); return; }
     t->data = malloc(total ? total : 1);
     if (total) memcpy(t->data, payload, total);
@@ -580,7 +585,9 @@ static void deliver(struct thread *th) {
         m.data_size = t->data_size;
         m.offsets_size = t->offsets_size;
         if (t->target) { m.node_ptr = t->target->ptr; m.node_cookie = t->target->cookie; }
-        u64 total = ((t->data_size + 7) & ~7UL) + t->offsets_size;
+        // no padding between the parcel and its offset table: the guest writes them back to back
+    // and reads them back the same way, so rounding up here desynchronised the two sides
+    u64 total = t->data_size + t->offsets_size;
         u8 *buf = malloc(sizeof m + (size_t)total + 8);
         memcpy(buf, &m, sizeof m);
         if (total) memcpy(buf + sizeof m, t->data, (size_t)total);
