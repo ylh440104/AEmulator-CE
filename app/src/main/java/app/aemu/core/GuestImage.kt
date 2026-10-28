@@ -53,7 +53,7 @@ data class VmSettings(
         .put("gpu", gpu).put("hwui", hwui).put("jit", jit).put("fullDexopt", fullDexopt).put("fbHz", fbHz)
         .put("touchHz", touchHz).put("netProxy", netProxy).put("lowRam", lowRam)
         .put("showFrame", showFrame).put("showNavBar", showNavBar).put("navKeys", navKeys).put("navSize", navSize)
-        .put("keepScreenOn", keepScreenOn).put("showLed", showLed).put("mtMode", mtMode).put("legacyEngine", legacyEngine)
+        .put("keepScreenOn", keepScreenOn).put("showLed", showLed).put("verboseLog", verboseLog).put("mtMode", mtMode).put("legacyEngine", legacyEngine)
         .put("ramMb", ramMb).put("radio", radio).put("native32", native32).put("imei", imei).put("qemuArgs", qemuArgs)
 
     companion object {
@@ -92,6 +92,7 @@ data class VmSettings(
                 navSize = o.optInt("navSize", d.navSize),
                 keepScreenOn = o.optBoolean("keepScreenOn", d.keepScreenOn),
                 showLed = o.optBoolean("showLed", d.showLed),
+                verboseLog = o.optBoolean("verboseLog", d.verboseLog),
                 mtMode = o.optInt("mtMode", d.mtMode),
                 legacyEngine = o.optBoolean("legacyEngine", false),
                 ramMb = o.optInt("ramMb", 0),
