@@ -463,15 +463,10 @@ static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, cons
 }
 
 static void deliver(struct thread *th) {
-    if (!th->waiting) return;
     if (!deliverable(th)) return;
     struct proc *p = th->proc;
-    struct wq *q = th->todo.head ? &th->todo : &p->todo;
-    struct work *w = wq_pop(q);
-    if (!w) return;
-    th->waiting = 0;
 
-    struct node *nodework[8];
+    struct node *nodework[16];
     int nnodes = 0;
     struct txn *t = 0;
     u32 err = 0;
@@ -479,14 +474,18 @@ static void deliver(struct thread *th) {
     u64 dead_cookie = 0;
     int have_dead = 0, have_clear = 0;
     u32 ack = 0;
+
     for (;;) {
+        struct wq *q = th->todo.head ? &th->todo : &p->todo;
+        struct work *w = wq_pop(q);
+        if (!w) break;
         switch (w->type) {
-        case W_COMPLETE: ack++; break;
+        case W_COMPLETE:
         case W_ACK: ack++; break;
         case W_ERROR: err = w->err; have_err = 1; break;
         case W_NODE:
             w->node->queued = 0;
-            if (nnodes < 8) nodework[nnodes++] = w->node;
+            if (nnodes < 16) nodework[nnodes++] = w->node;
             break;
         case W_DEAD_BINDER: dead_cookie = w->cookie; have_dead = 1; break;
         case W_CLEAR_DONE: dead_cookie = w->cookie; have_clear = 1; break;
@@ -494,11 +493,9 @@ static void deliver(struct thread *th) {
         }
         free(w);
         if (t || have_dead || have_clear || have_err) break;
-        w = q->head ? wq_pop(q) : 0;
-        if (!w) break;
     }
 
-    if (have_err) { sb_send(th, SB_R_ERROR, &err, 4, 0, 0, 0); th->waiting = 0; kick_proc(p); return; }
+    if (have_err) { sb_send(th, SB_R_ERROR, &err, 4, 0, 0, 0); kick_proc(p); return; }
     if (have_dead) { sb_send(th, SB_R_DEAD_BINDER, &dead_cookie, 8, 0, 0, 0); return; }
     if (have_clear) { sb_send(th, SB_R_CLEAR_DEATH_DONE, &dead_cookie, 8, 0, 0, 0); return; }
 
@@ -565,7 +562,9 @@ static void deliver(struct thread *th) {
         }
     }
     kick_proc(p);
-}static void thread_error(struct thread *th, u32 err) {
+}
+
+static void thread_error(struct thread *th, u32 err) {
     struct work *w = mkwork(W_ERROR);
     w->err = err;
     wq_push(&th->todo, w);
