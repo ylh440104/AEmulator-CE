@@ -551,9 +551,12 @@ static void deliver(struct thread *th) {
             if (p->bufs) p->bufs->prev = b;
             p->bufs = b;
         }
+        u32 more_flag = (th->todo.head || p->todo.head) ? SB_F_MORE : 0;
+        V("   send %s to pid %d/%d fd %d: %u bytes, more=%u",
+          t->reply ? "reply" : "txn", p->pid, th->tid, th->fd,
+          (u32)(sizeof m + total), more_flag);
         if (sb_send(th, t->reply ? SB_R_REPLY : SB_R_TRANSACTION, buf,
-                    (u32)(sizeof m + total), t->fds, t->nfds,
-                    (th->todo.head || p->todo.head) ? SB_F_MORE : 0) < 0)
+                    (u32)(sizeof m + total), t->fds, t->nfds, more_flag) < 0)
             V("!! send to pid %d failed: %s", p->pid, strerror(errno));
         free(buf);
         if (t->need_reply) {
@@ -834,7 +837,9 @@ static void on_message(struct thread *th) {
         break;
     }
     default:
-        sb_send(th, SB_R_OK, 0, 0, 0, 0, 0);
+        // Never answer a message we do not understand: a reply the guest did not ask for is read
+        // as the answer to whatever it is waiting on, and the real answer then arrives out of step.
+        logf_("sensesbinderd: ★ unknown message type %u (%u bytes) — ignored", h.type, blen);
         break;
     }
     for (int i = 0; i < nfds; i++) close(fds[i]);
