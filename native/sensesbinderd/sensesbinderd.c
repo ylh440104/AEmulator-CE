@@ -779,6 +779,16 @@ static void deliver(struct thread *th) {
             memcpy(&res, t->data, 4);
             V("   reply result for pid %d: %d", p->pid, res);
         }
+        // A reply carrying a flat_binder_object is how a lookup hands back a binder. If the object's
+        // type or handle is wrong, the guest treats the cookie as a pointer and dies on it — which is
+        // exactly what a SIGSEGV at si_addr=0x707545e7 after this ioctl looks like. Print the bytes.
+        if (t->reply && t->data_size && t->data_size <= 64) {
+            char rh[420], rn[200];
+            parcel_dump(t->data, t->data_size, rn, sizeof rn);
+            parcel_hex(t->data, t->data_size, rh, sizeof rh);
+            V("   reply body pid %d code %u size %llu [%s] %s",
+              p->pid, t->code, (unsigned long long)t->data_size, rn, rh);
+        }
         V("   send %s to pid %d/%d fd %d: %u bytes, more=%u",
           t->reply ? "reply" : "txn", p->pid, th->tid, th->fd,
           (u32)(sizeof m + total), more_flag);
