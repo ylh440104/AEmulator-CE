@@ -455,31 +455,20 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
 static void proc_release(struct proc *p);
 
 /**
- * Read one String16 out of a binder parcel and copy it into out as plain ASCII.
- * A servicemanager call carries its interface descriptor first and the name it refers to second, so
- * callers pass index 1 for the interesting one.
+ * Dump the head of a parcel as hex. Guessing at the layout cost several rounds: two attempts at
+ * decoding String16 produced an empty name because the offsets were not where I assumed. Sixteen
+ * bytes of the real thing answer the question outright.
  */
-static int parcel_string(const char *data, u64 size, int index, char *out, size_t cap) {
-    u64 off = 0;
-    for (int k = 0; k <= index; k++) {
-        if (off + 4 > size) return 0;
-        u32 len;
-        memcpy(&len, data + off, 4);
-        if (len > 512 || off + 4 + (u64)len * 2 > size) return 0;
-        if (k == index) {
-            size_t i;
-            for (i = 0; i < len && i + 1 < cap; i++) {
-                u16 ch;
-                memcpy(&ch, data + off + 4 + i * 2, 2);
-                out[i] = (ch >= 32 && ch < 127) ? (char)ch : '?';
-            }
-            out[i] = 0;
-            return 1;
-        }
-        off += 4 + (u64)len * 2;
-        off = (off + 3) & ~3ULL;
+static void parcel_hex(const char *data, u64 size, char *out, size_t cap) {
+    static const char d[] = "0123456789abcdef";
+    size_t n = size < 48 ? (size_t)size : 48, o = 0;
+    for (size_t i = 0; i < n && o + 3 < cap; i++) {
+        unsigned char b = (unsigned char)data[i];
+        out[o++] = d[b >> 4];
+        out[o++] = d[b & 15];
+        if ((i & 3) == 3 && o + 2 < cap) out[o++] = ' ';
     }
-    return 0;
+    out[o] = 0;
 }
 
 static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int *fds, int nfds, int reply) {
@@ -532,18 +521,17 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     }
     t->to_proc = to;
     if (!reply) {
-        // For a servicemanager call the interesting part is which service is being registered or
-        // looked up: without that, "code 1" and "code 2" are indistinguishable from each other and
-        // there was no way to tell whether SurfaceFlinger ever announced itself.
-        char name[72];
-        if (m->handle == 0 && (m->code == 1 || m->code == 2 || m->code == 3) &&
-            parcel_string(t->data, t->data_size, 1, name, sizeof name))
-            V("txn pid %d -> pid %d handle %u code %u \"%s\" flags %#x data %llu",
-              p->pid, to->pid, m->handle, m->code, name, m->flags,
-              (unsigned long long)m->data_size);
-        else
+        // Every servicemanager call gets its parcel dumped. The name decoder produced an empty
+        // string twice, and the only way to stop guessing at the layout is to look at the bytes.
+        char hex[160];
+        if (m->handle == 0 && m->code >= 1 && m->code <= 3) {
+            parcel_hex(t->data, t->data_size, hex, sizeof hex);
+            V("txn pid %d -> pid %d handle %u code %u data %llu [%s]",
+              p->pid, to->pid, m->handle, m->code, (unsigned long long)m->data_size, hex);
+        } else {
             V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
               p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
+        }
     }
     if (translate(th, to, t, t->data) < 0) {
         V("   !! translate failed for code %u", m->code);
