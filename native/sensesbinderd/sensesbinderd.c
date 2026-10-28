@@ -332,8 +332,14 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
     struct proc *p = th->proc;
     t->held = zalloc((n + 2) * sizeof *t->held);
     int fdi = 0;
+    if (n) V("   translate code %u: %llu offsets, data %llu, words %llu/%llu", t->code,
+             (unsigned long long)n, (unsigned long long)t->data_size,
+             (unsigned long long)offs[0], n > 1 ? (unsigned long long)offs[1] : 0ULL);
     for (u64 i = 0; i < n; i++) {
-        if (offs[i] + sizeof(struct fbo) > t->data_size) return -1;
+        if (offs[i] + sizeof(struct fbo) > t->data_size) {
+            V("   !! offset %llu out of %llu", (unsigned long long)offs[i], (unsigned long long)t->data_size);
+            return -1;
+        }
         struct fbo *o = (struct fbo *)(data + offs[i]);
         struct held *h = &t->held[t->nheld];
         switch (o->type) {
@@ -399,14 +405,20 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         struct node *n;
         if (m->handle) { struct ref *r = ref_get(p, m->handle); n = r ? r->node : 0; }
         else n = ctx_mgr;
-        if (!n || !n->owner) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
+        if (!n || !n->owner) {
+        V("   !! no target for handle %u (node %p owner %p)", m->handle, (void *)n, n ? (void *)n->owner : 0);
+        sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return;
+    }
         t->target = n;
         to = n->owner;
     }
     t->to_proc = to;
     if (!reply) V("txn pid %d -> pid %d handle %u code %u flags %#x data %llu",
                   p->pid, to->pid, m->handle, m->code, m->flags, (unsigned long long)m->data_size);
-    if (translate(th, to, t, t->data) < 0) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
+    if (translate(th, to, t, t->data) < 0) {
+        V("   !! translate failed for code %u", m->code);
+        sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return;
+    }
     if (t->target) {
         t->target->local_strong++;
         node_work(t->target);
@@ -796,18 +808,27 @@ static void on_message(struct thread *th) {
               th->proc ? th->proc->pid : 0, th->tid, tx->handle, tx->code,
               (unsigned long long)tx->data_size);
             if (blen > sizeof(*tx) && tx->data_size >= 8) {
-                // the Parcel of a servicemanager call: [len][name16]; the name is what the caller wants
-                const u8 *d = (const u8 *)rxbuf + sizeof(*tx);
-                u32 slen = 0;
-                memcpy(&slen, d, 4);
-                if (slen > 0 && slen < 64 && 4 + slen * 2 <= tx->data_size && slen * 2 + 4 <= blen - sizeof(*tx)) {
-                    char nm[128]; u32 i;
-                    for (i = 0; i < slen && i < 60; i++) {
-                        u16 ch; memcpy(&ch, d + 4 + i * 2, 2);
-                        nm[i] = (ch < 128 && ch >= 32) ? (char)ch : '?';
+                // a servicemanager Parcel starts with the interface token and only then names the
+                // service, so skip the first string and read the second: that one is the answer to
+                // "what is it looking for"
+                const u8 *base = (const u8 *)rxbuf + sizeof(*tx);
+                u64 room = (u64)blen - sizeof(*tx), off = 0;
+                for (int k = 0; k < 2; k++) {
+                    u32 slen = 0;
+                    if (off + 4 > room) break;
+                    memcpy(&slen, base + off, 4);
+                    if (slen > 200 || off + 4 + (u64)slen * 2 > room) break;
+                    if (k == 1) {
+                        char nm[256]; u32 i;
+                        for (i = 0; i < slen && i < 200; i++) {
+                            u16 ch; memcpy(&ch, base + off + 4 + i * 2, 2);
+                            nm[i] = (ch < 128 && ch >= 32) ? (char)ch : '?';
+                        }
+                        nm[i] = 0;
+                        V("   name \"%s\"", nm);
                     }
-                    nm[i] = 0;
-                    V("   wants \"%s\"", nm);
+                    off += 4 + (u64)slen * 2;
+                    off = (off + 3) & ~3ULL;
                 }
             }
             do_transact(th, tx, (char *)rxbuf + sizeof(struct sb_txn), fds, nfds, h.type == SB_REPLY);
