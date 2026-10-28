@@ -76,6 +76,12 @@ jobs:
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" "../../app/src/main/assets/engines/kk/audio.primary.v1.so" 2>/dev/null || true
           cd ../..
           git diff --stat -- "$OUT"
+          # sensesbinderd: the /dev/binder daemon for the SENSES translator (1.x), built from the same
+          # protocol header libqemu_senses.so was built with; the engine's binderd speaks another one
+          "$CC" --target=aarch64-linux-android26 -O2 -D_GNU_SOURCE -Wall -Wno-unused-function \
+            -o app/src/main/jniLibs/arm64-v8a/libsensesbinderd.so native/sensesbinderd/sensesbinderd.c || \
+            { echo "::error::the 1.x binder daemon failed to build"; exit 1; }
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" app/src/main/jniLibs/arm64-v8a/libsensesbinderd.so 2>/dev/null || true
 
       - name: Build the signed APK
         env:
