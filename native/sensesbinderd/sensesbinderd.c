@@ -522,7 +522,7 @@ static void deliver(struct thread *th) {
         node_free_if_unused(nodework[i]);
     }
 
-    if (ack) sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
+    if (ack) { V("   -> pid %d: %u ack", p->pid, ack); sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); }
 
     if (t) {
         struct sb_txn m;
@@ -550,8 +550,9 @@ static void deliver(struct thread *th) {
             if (p->bufs) p->bufs->prev = b;
             p->bufs = b;
         }
-        sb_send(th, t->reply ? SB_R_REPLY : SB_R_TRANSACTION, buf,
-                (u32)(sizeof m + total), t->fds, t->nfds, 0);
+        if (sb_send(th, t->reply ? SB_R_REPLY : SB_R_TRANSACTION, buf,
+                    (u32)(sizeof m + total), t->fds, t->nfds, 0) < 0)
+            V("!! send to pid %d failed: %s", p->pid, strerror(errno));
         free(buf);
         if (t->need_reply) {
             t->to_parent = th->stack;
