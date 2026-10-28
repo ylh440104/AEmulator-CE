@@ -151,6 +151,7 @@ static struct work *mkwork(int type) {
 
 static void deliver(struct thread *th);
 static void kick_proc(struct proc *p);
+static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, const int *fds, int nfds, u32 flags);
 static void node_work(struct node *n) {
     if (!n || !n->owner) return;
     if (n->has_strong && !n->has_weak) return;
