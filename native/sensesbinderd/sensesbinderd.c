@@ -363,6 +363,7 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     struct txn *in_reply_to = 0;
     if (reply) {
         in_reply_to = th->stack;
+        V("   reply from pid %d: stack=%s", p->pid, in_reply_to ? "yes" : "EMPTY");
         if (!in_reply_to) { txn_free(t); return; }
         th->stack = in_reply_to->from_parent;
         target_thread = in_reply_to->from;
@@ -526,6 +527,7 @@ static void deliver(struct thread *th) {
     if (t) {
         struct sb_txn m;
         memset(&m, 0, sizeof m);
+        V("<< %s -> pid %d code %u stack %s", t->reply ? "reply" : "txn", p->pid, t->code, th->stack ? "busy" : "idle");
         m.code = t->code;
         m.flags = t->flags;
         m.sender_pid = (u32)t->sender_pid;
