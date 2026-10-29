@@ -426,14 +426,13 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
-             * The owner just handed its own object to a parcel, so it holds a reference of its own
-             * to that object. Without recording it the node looks unreferenced, emit_node sends it
-             * BR_RELEASE/BR_DECREFS, and the owner frees the very object the parcel still carries —
-             * which is how getService("power") came back with a T_BINDER whose memory was already
-             * gone, and system_server died on it. The count belongs to the node, not to the parcel,
-             * so it is raised once when the node first appears.
+             * The node's own reference count is not raised here. Doing so made emit_node send
+             * BR_ACQUIRE for objects nobody had asked to hold, and IPCThreadState::executeCommand
+             * then called incStrong on the address the node carried — which for some nodes is not a
+             * live object at all (a fault address of 0xa9edfa11 with the low bit set, i.e. a code
+             * pointer). An owner already holds what it published; only another process taking a
+             * reference should produce BR_ACQUIRE.
              */
-            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -454,7 +453,6 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *nr = ref_for_node(to, r->node);
             o->binder = (u32)nr->desc; o->cookie = 0;
             ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
-            if (strong && r->node->owner) { r->node->internal_strong = 1; node_work(r->node); }
             break;
         }
         case T_FD:
