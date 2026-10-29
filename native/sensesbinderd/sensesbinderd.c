@@ -164,12 +164,12 @@ static void node_work(struct node *n) {
     if (n->queued) return;
     /*
      * The owner only has something to do when what it has been told differs from what is true.
-     * Stating it that way covers the case that used to fall through: a node the owner has just
-     * published holds its own reference, so there is a BR_ACQUIRE to deliver even though neither
-     * flag is set yet. The old chain of early returns saw two zero flags and gave up.
+     * internal_strong counts here because it decides whether the object is still worth a BR_INCREFS —
+     * an owner that published something holds it, so the node must not look unreferenced. It does not
+     * produce a BR_ACQUIRE; see emit_node.
      */
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    int strong = n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
     if (strong == n->has_strong && weak == n->has_weak) return;
     if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
@@ -426,13 +426,14 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
-             * The node's own reference count is not raised here. Doing so made emit_node send
-             * BR_ACQUIRE for objects nobody had asked to hold, and IPCThreadState::executeCommand
-             * then called incStrong on the address the node carried — which for some nodes is not a
-             * live object at all (a fault address of 0xa9edfa11 with the low bit set, i.e. a code
-             * pointer). An owner already holds what it published; only another process taking a
-             * reference should produce BR_ACQUIRE.
+             * The owner holds what it just published, so the node carries a reference of its own and
+             * survives until the owner drops it. Removing this made node_free_if_unused throw the
+             * node away while the guest still held an sp<> to the object, and the next incStrong read
+             * mRefs from a freed object (fault address 0x84 via weakref_type::incWeak). It only
+             * keeps the node alive — it is not reported to the owner as a BR_ACQUIRE, because that
+             * event means somebody else took a reference.
              */
+            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -453,6 +454,7 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *nr = ref_for_node(to, r->node);
             o->binder = (u32)nr->desc; o->cookie = 0;
             ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
+            if (strong && r->node->owner) { r->node->internal_strong = 1; node_work(r->node); }
             break;
         }
         case T_FD:
@@ -623,8 +625,15 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    /*
+     * An owner holds what it published, and node_free_if_unused keeps the node for that reason — but
+     * it is not something the owner has to be told: BR_ACQUIRE means "somebody else took a reference,
+     * go incStrong", and sending it here made IPCThreadState::executeCommand call incStrong on node
+     * pointers that are not live objects (fault address 0xa9edfa11, low bit set: a code pointer).
+     * Only a reference from another process produces that event.
+     */
+    int strong = n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
 #define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
     if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; n->local_weak++; }
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; n->local_strong++; }
