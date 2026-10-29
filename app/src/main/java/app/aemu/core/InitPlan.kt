@@ -118,7 +118,6 @@ object InitPlan {
         Rule("hwservicemanager", delayMs = 800, minApi = 26),
         Rule("vndservicemanager", delayMs = 500, minApi = 26),
         Rule("surfaceflinger", delayMs = 2000),
-        Rule("debuggerd", delayMs = 200),
         Rule("healthd", delayMs = 500, minApi = 19),
         Rule("keystore", delayMs = 300),
         Rule("installd", waitSocket = "installd"),
@@ -185,7 +184,7 @@ object InitPlan {
         "kpoc_charger",
         // mtkbt: MediaTek's Bluetooth stack daemon; without its chip it fills the log with thousands of lines a second
         "mtkbt",
-        "ueventd", "vold", "rild", "ril-daemon", "adbd", "debuggerd64", "console", "dbus", "bluetoothd",
+        "ueventd", "vold", "rild", "ril-daemon", "adbd", "debuggerd", "debuggerd64", "console", "dbus", "bluetoothd",
         "btld", "wpa_supplicant", "p2p_supplicant", "dhcpcd", "racoon", "mtpd", "qemud", "goldfish-setup", "goldfish-logcat",
         "dumpstate", "flash_recovery", "recovery", "redbend_ua", "sreadaheadd", "lpmkey", "playlpm", "charger", "macloader",
         "mfgloader", "wlandutservice", "bt_dut_cmd", "bootanim", "samsungani", "playsound", "sdcard", "fuse_sdcard0",
@@ -226,13 +225,6 @@ object InitPlan {
             GuestService("vndservicemanager", listOf("/system/bin/vndservicemanager", "/dev/vndbinder")) else null
         "surfaceflinger" -> if (File(root, "system/bin/surfaceflinger").isFile)
             GuestService("surfaceflinger", listOf("/system/bin/surfaceflinger")) else null
-        /*
-         * The crash handler. A guest process that dies of a signal connects to /dev/socket/debuggerd
-         * and this is what turns that into a stack trace; without it the death is a bare
-         * "terminated by signal (11)" and the address it died on is never printed.
-         */
-        "debuggerd" -> if (File(root, "system/bin/debuggerd").isFile)
-            GuestService("debuggerd", listOf("/system/bin/debuggerd"), mapOf("debuggerd" to "0666")) else null
         // (8.0+: in /system, with its service line in the ramdisk's init.rc a system-only image comes without)
         "healthd" -> listOf("/sbin/healthd", "/system/bin/healthd").firstOrNull { File(root, it.drop(1)).isFile }?.let { GuestService("healthd", listOf(it)) }
         // up to 4.2 keystore serves its own control socket and exits at once without it (4.3+: binder)

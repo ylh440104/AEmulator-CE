@@ -442,20 +442,19 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *r = ref_get(p, o->binder);
             int strong = o->type == T_HANDLE;
             if (!r) return -1;
-            if (r->node->owner == to) {
-                /*
-                 * The object is going home. The owner holds it itself, so this is its own reference
-                 * coming back — not one the parcel lends it. Recording it as a held reference made
-                 * BC_FREE_BUFFER take it away again, after which the owner dropped an object it was
-                 * still using. internal_strong is where the owner's own count lives, and it stays.
-                 */
-                o->type = strong ? T_BINDER : T_WEAK_BINDER; o->binder = (u32)r->node->ptr; o->cookie = (u32)r->node->cookie;
-                if (strong) { r->node->internal_strong = 1; node_work(r->node); }
-            } else {
-                struct ref *nr = ref_for_node(to, r->node);
-                o->binder = (u32)nr->desc; o->cookie = 0;
-                ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
-            }
+            /*
+             * A handle always goes out as a handle, even when it is on its way back to the process
+             * that published the object. Handing such an object home as BINDER_TYPE_BINDER with its
+             * own address is what Parcel::readStrongBinder turns into refbase->incStrong(obj->binder),
+             * and that call read [0x70754613 + 4] — no mapping — right after getService("power") came
+             * back, which is where system_server died. Every other binder object this firmware passes
+             * (media.*, SurfaceFlinger, IMemoryHeap) goes out as a handle and works, so the home case
+             * stops being special.
+             */
+            struct ref *nr = ref_for_node(to, r->node);
+            o->binder = (u32)nr->desc; o->cookie = 0;
+            ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
+            if (strong && r->node->owner) { r->node->internal_strong = 1; node_work(r->node); }
             break;
         }
         case T_FD:
