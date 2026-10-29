@@ -549,25 +549,6 @@ EXPORT int open(const char *path, int flags, ...) {
     if (flags & 0100 /* O_CREAT */) {
         __builtin_va_list ap; __builtin_va_start(ap, flags); mode = __builtin_va_arg(ap, int); __builtin_va_end(ap);
     }
-    /*
-     * /dev/pmem is how 1.x asks for a physical memory heap: MemoryHeapBase opens it and maps the
-     * result. Nothing on a modern kernel provides it, and without it SurfaceFlinger's BootAnimation
-     * cannot build its buffer — which is why the control block's state stayed eNoSurface and
-     * system_server died in lock_layer. A memfd is the same thing for our purposes: a descriptor
-     * that can be sized and mapped, and the shim's ashmem layer recognises it by name.
-     */
-    if (path && path[0] == '/' && path[1] == 'd') {
-        static const char pm[] = "/dev/pmem";
-        int k = 0;
-        while (pm[k] && path[k] == pm[k]) k++;
-        if (!pm[k] && !path[k]) {
-            int fd = (int)sys3(385 /* memfd_create */, (long)"guest-ashmem", 1 /* MFD_CLOEXEC */, 0);
-            if (fd >= 0) {
-                sys3(194 /* ftruncate64 */, fd, 8L << 20, 0);
-                return fd;
-            }
-        }
-    }
     if (path && (flags & 3) && path[0] == '/' && path[1] == 'p') {
         int fd = oom_open(path);
         if (fd >= 0) return fd;
