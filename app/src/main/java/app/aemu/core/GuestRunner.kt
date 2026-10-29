@@ -162,19 +162,6 @@ class GuestRunner(
         // 1.x binaries have no PT_GNU_STACK: the ARM kernel let them execute any readable page, and the
         // Glide/PixelFlinger assembler relies on it. The shim turns that rule on for this firmware only.
         if (img.api < 4) e["DHD_ENV_AEMU_RIE"] = "1"
-        /*
-         * PixelFlinger writes ARM code into the heap and then calls cacheflush to say it did. By
-         * default SENSES answers that call and drops it — dropping it is what keeps Dalvik's JIT from
-         * paying for a retranslation on every compiled chain. But then the translations qemu built for
-         * that heap memory stay in force, so the scanline function is executed from whatever was
-         * translated there before, not from the bytes just written: the crash lands on a heap address,
-         * the bytes at that address look like the right code, and the instruction that faults is one
-         * the assembler never emitted.
-         *
-         * GUEST_NO_SMC makes cacheflush invalidate the named range. It costs a retranslation per call,
-         * which is the price of the software rasteriser working at all.
-         */
-        e["DHD_ENV_GUEST_NO_SMC"] = "1"
         // libaemushim serves /proc/meminfo scaled to this budget instead of the phone's own memory
         e["AEMU_RAM_KB"] = (guestRamMb(img.api, s.ramMb) * 1024L).toString()
         e["HOME"] = "/data"
