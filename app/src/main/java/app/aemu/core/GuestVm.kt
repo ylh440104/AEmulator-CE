@@ -641,13 +641,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun startBinder() {
         val sock = paths.binderSock.absolutePath
         when (engine) {
-            // Every engine binary is now built from the same tree — the published one — so all of
-            // them speak the SB protocol and there is one daemon for all of them. Before that,
-            // libqemu_kk.so spoke an older protocol and needed libbinderd_kk.so to match; pairing
-            // it with this daemon instead produced a desync on the first message and servicemanager
-            // died on it. The old per-engine daemons are gone with the old engines.
-            Engine.KK -> spawn("binderd", listOf(paths.nativeBin("libsensesbinderd.so").absolutePath, "-s", sock) +
-                if (settings.verboseLog) listOf("-v") else emptyList(), emptyMap())
+            // 1.x runs on the SENSES translator, whose /dev/binder client speaks the SB protocol;
+            // the engine's binderd speaks a different one, so those two cannot meet. This daemon is
+            // built from the same protocol header the translator was built with.
+            Engine.KK -> spawn("binderd", listOf(paths.nativeBin(if (img.api < 4) "libsensesbinderd.so" else engine.binderd).absolutePath, "-s", sock) +
+                if (img.api < 4 && settings.verboseLog) listOf("-v") else emptyList(), emptyMap())
             Engine.N64 -> {
                 val env = if (File(paths.bin, "binder.verbose").exists()) mapOf("AEMU_BINDER_VERBOSE" to "1") else emptyMap()
                 val bin = paths.nativeBin(kernel.binderd).absolutePath

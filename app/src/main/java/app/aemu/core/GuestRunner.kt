@@ -181,16 +181,7 @@ class GuestRunner(
         e["DHD_CREDS"] = paths.creds.absolutePath
         e["DHD_INPUT"] = paths.inputSock.absolutePath
         if (singleTouch) e["DHD_INPUT_ST"] = "1"
-        /*
-         * Verbose binder logging on for the old firmware, unconditionally.
-         *
-         * The report that matters comes from the engine's read-buffer dump, which is
-         * gated on the verbose flag: it decodes the buffer the guest is about to
-         * parse, command by command. Without it the log shows the daemon's own view
-         * of a message and nothing about what crossed the boundary — and the two
-         * sides disagree about that on this image.
-         */
-        if (binderVerbose || img.api < 4) e["DHD_BINDER_VERBOSE"] = "1"
+        if (binderVerbose) e["DHD_BINDER_VERBOSE"] = "1"
         sdcardHost?.let { e["DHD_SDCARD"] = it.absolutePath }
         if (net.http80 > 0) e["DHD_HTTP80"] = net.http80.toString()
         if (net.https443 > 0) e["DHD_HTTPS443"] = net.https443.toString()
