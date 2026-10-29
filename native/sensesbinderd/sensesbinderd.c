@@ -164,11 +164,10 @@ static void node_work(struct node *n) {
     if (n->queued) return;
     /*
      * The owner only has something to do when what it has been told differs from what is true.
-     * A node whose pointer is not aligned is never reported (see emit_node), so it is skipped here too.
+     * internal_strong keeps the node alive but triggers nothing; see emit_node.
      */
-    if ((n->ptr & 3u) != 0) return;
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    int strong = n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
     if (strong == n->has_strong && weak == n->has_weak) return;
     if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
@@ -625,19 +624,16 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
     /*
-     * A node whose pointer is not four-byte aligned is not a live object. The address in it came from
-     * a parcel that meant something else — 0xa9edfa11 has the Thumb bit set, so it is a code pointer —
-     * and telling the owner about it just makes IPCThreadState::executeCommand call incStrong on that
-     * address. The node stays alive (internal_strong keeps it) but stays silent.
+     * internal_strong only keeps the node alive (node_free_if_unused looks at it); it is not an event.
+     *
+     * BR_ACQUIRE asks the owner to incStrong the address the node carries, and there is no way to tell
+     * from that address whether it still points at a live object: 0x81588 is four-byte aligned, sits in
+     * the heap, and looks exactly like a real one — yet executeCommand turned it into this = ptr +
+     * [ptr-12] = 0xa9da9211 and died on the load. An owner already holds what it published, so only a
+     * reference from another process justifies asking it again.
      */
-    if ((n->ptr & 3u) != 0) return 0;
-    /*
-     * The owner holds what it published. That is a real reference and the owner must be told: BR_ACQUIRE
-     * is what makes it incStrong, and without it the object is destroyed while another process still
-     * holds an sp<> to it — which is how incStrong later read mRefs out of freed memory (0x84, 0x35d8d0).
-     */
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    int strong = n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
 #define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
     if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; n->local_weak++; }
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; n->local_strong++; }
