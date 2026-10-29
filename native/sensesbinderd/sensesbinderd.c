@@ -164,10 +164,12 @@ static void node_work(struct node *n) {
     if (n->queued) return;
     /*
      * The owner only has something to do when what it has been told differs from what is true.
-     * internal_strong keeps the node alive but triggers nothing; see emit_node.
+     * Stating it that way covers the case that used to fall through: a node the owner has just
+     * published holds its own reference, so there is a BR_ACQUIRE to deliver even though neither
+     * flag is set yet. The old chain of early returns saw two zero flags and gave up.
      */
-    int strong = n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
+    int strong = n->internal_strong || n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong;
     if (strong == n->has_strong && weak == n->has_weak) return;
     if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
@@ -424,12 +426,12 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
-             * The owner holds what it just published, so the node carries a reference of its own and
-             * survives until the owner drops it. Removing this made node_free_if_unused throw the
-             * node away while the guest still held an sp<> to the object, and the next incStrong read
-             * mRefs from a freed object (fault address 0x84 via weakref_type::incWeak). It only
-             * keeps the node alive — it is not reported to the owner as a BR_ACQUIRE, because that
-             * event means somebody else took a reference.
+             * The owner just handed its own object to a parcel, so it holds a reference of its own
+             * to that object. Without recording it the node looks unreferenced, emit_node sends it
+             * BR_RELEASE/BR_DECREFS, and the owner frees the very object the parcel still carries —
+             * which is how getService("power") came back with a T_BINDER whose memory was already
+             * gone, and system_server died on it. The count belongs to the node, not to the parcel,
+             * so it is raised once when the node first appears.
              */
             if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
@@ -623,17 +625,8 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
-    /*
-     * internal_strong only keeps the node alive (node_free_if_unused looks at it); it is not an event.
-     *
-     * BR_ACQUIRE asks the owner to incStrong the address the node carries, and there is no way to tell
-     * from that address whether it still points at a live object: 0x81588 is four-byte aligned, sits in
-     * the heap, and looks exactly like a real one — yet executeCommand turned it into this = ptr +
-     * [ptr-12] = 0xa9da9211 and died on the load. An owner already holds what it published, so only a
-     * reference from another process justifies asking it again.
-     */
-    int strong = n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong || n->internal_strong;
+    int strong = n->internal_strong || n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong;
 #define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
     if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; n->local_weak++; }
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; n->local_strong++; }
