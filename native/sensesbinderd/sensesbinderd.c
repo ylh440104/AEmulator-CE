@@ -161,11 +161,17 @@ static void kick_proc(struct proc *p);
 static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, const int *fds, int nfds, u32 flags);
 static void node_work(struct node *n) {
     if (!n || !n->owner) return;
-    if (n->has_strong && !n->has_weak) return;
     if (n->queued) return;
-    if (n->internal_strong > 0 || n->pend_strong > 0 || n->pend_weak > 0) return;
-    if (!n->has_strong && !n->has_weak) return;
-    if (n->local_strong > 0 || n->local_weak > 0) return;
+    /*
+     * The owner only has something to do when what it has been told differs from what is true.
+     * Stating it that way covers the case that used to fall through: a node the owner has just
+     * published holds its own reference, so there is a BR_ACQUIRE to deliver even though neither
+     * flag is set yet. The old chain of early returns saw two zero flags and gave up.
+     */
+    int strong = n->internal_strong || n->local_strong;
+    int weak = n->nrefs || n->local_weak || strong;
+    if (strong == n->has_strong && weak == n->has_weak) return;
+    if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
     struct work *w = mkwork(W_NODE);
     w->node = n;
@@ -419,6 +425,15 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct node *nd = node_get(p, o->binder, o->cookie, 1);
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
+            /*
+             * The owner just handed its own object to a parcel, so it holds a reference of its own
+             * to that object. Without recording it the node looks unreferenced, emit_node sends it
+             * BR_RELEASE/BR_DECREFS, and the owner frees the very object the parcel still carries —
+             * which is how getService("power") came back with a T_BINDER whose memory was already
+             * gone, and system_server died on it. The count belongs to the node, not to the parcel,
+             * so it is raised once when the node first appears.
+             */
+            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -428,8 +443,14 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             int strong = o->type == T_HANDLE;
             if (!r) return -1;
             if (r->node->owner == to) {
+                /*
+                 * The object is going home. The owner holds it itself, so this is its own reference
+                 * coming back — not one the parcel lends it. Recording it as a held reference made
+                 * BC_FREE_BUFFER take it away again, after which the owner dropped an object it was
+                 * still using. internal_strong is where the owner's own count lives, and it stays.
+                 */
                 o->type = strong ? T_BINDER : T_WEAK_BINDER; o->binder = (u32)r->node->ptr; o->cookie = (u32)r->node->cookie;
-                if (strong) { r->node->local_strong++; node_work(r->node); h->node = r->node; h->strong = 1; t->nheld++; }
+                if (strong) { r->node->internal_strong = 1; node_work(r->node); }
             } else {
                 struct ref *nr = ref_for_node(to, r->node);
                 o->binder = (u32)nr->desc; o->cookie = 0;
