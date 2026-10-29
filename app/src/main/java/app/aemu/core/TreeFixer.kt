@@ -143,6 +143,63 @@ class TreeFixer(
         keyLayout()
         for (n in LOGS) File(root, "dev/log/$n").let { if (!it.isFile) { it.parentFile?.mkdirs(); it.createNewFile() } }
         makeFb()
+        skipBootAnimation()
+    }
+    /**
+     * Android 1.0's SurfaceFlinger creates a BootAnimation at the end of readyToRun, and that is what
+     * locks layer 0 and drives libpixelflinger. On this firmware pixelflinger dies in there (the
+     * scanline slot of context_t ends up holding a heap address) and the surface never reaches the
+     * framebuffer, so the screen stays black and system_server's lock_layer on layer 0 times out for
+     * ever. The creation sits behind a conditional branch whose target is the function's own tail:
+     *
+     *     cmp  r5, #0
+     *     bne.n  <tail>        ; d1 xx
+     *     ...                  ; BootAnimation::C1 and its refcounting
+     *   tail:
+     *     movs r0, #0
+     *     add  sp, #68
+     *     pop  {r4, r5, r6, r7, pc}
+     *
+     * Making that branch unconditional skips the animation and leaves the rest of the function intact.
+     * Only the first byte of the Thumb encoding changes, d1 -> e0; the offset stays as it was.
+     */
+    private fun skipBootAnimation() {
+        val f = File(root, "system/lib/libsurfaceflinger.so")
+        if (!f.isFile) return
+        runCatching {
+            val b = f.readBytes()
+            /*
+             * Thumb is little-endian halfwords, so the file bytes of "cmp r5, #0 ; bne.n <tail>"
+             * are  00 2d  <off8> d1  — the branch opcode d1 is the high half, hence last.
+             *
+             * Two things make this occurrence the tail of readyToRun, and both are checked before
+             * anything is written: the branch must land on a return sequence (movs r0, #0 /
+             * add sp, #imm / pop {..., pc}), and "cmp r5, #0" alone turns up dozens of times in a
+             * library this size.
+             */
+            var at = -1
+            var i = 0
+            while (i < b.size - 10 && at < 0) {
+                if (b[i] == 0x00.toByte() && b[i + 1] == 0x2d.toByte() && b[i + 3] == 0xd1.toByte()) {
+                    val off = b[i + 2].toInt() and 0xff
+                    if (off < 0x80) {
+                        val branch = i + 2
+                        val t = branch + 4 + off * 2                 // PC = insn + 4, offsets in halfwords
+                        if (t + 6 <= b.size &&
+                            b[t] == 0x00.toByte() && b[t + 1] == 0x20.toByte() &&      // movs r0, #0
+                            b[t + 3] == 0xb0.toByte() &&                               // add sp, #imm
+                            b[t + 4] == 0xf0.toByte() && b[t + 5] == 0xbd.toByte()) {  // pop {..., pc}
+                            at = i + 3
+                        }
+                    }
+                }
+                i++
+            }
+            if (at < 0) { log("surfaceflinger: readyToRun tail not found, left as is"); return@runCatching }
+            b[at] = 0xe0.toByte()                                        // bne.n -> b.n
+            f.writeBytes(b)
+            log("surfaceflinger: BootAnimation skipped (file offset 0x${at.toString(16)})")
+        }.onFailure { log("surfaceflinger: skipBootAnimation failed: $it") }
     }
 
     /**
