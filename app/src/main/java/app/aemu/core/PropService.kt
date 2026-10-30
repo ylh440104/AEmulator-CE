@@ -76,7 +76,7 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
                 if (a.put(p.name, runCatching { p.readText().trim() }.getOrDefault(""))) n++
             }
         }
-        for ((k, v) in defaults) if (a.get(k) == null) a.put(k, v)
+        for ((k, v) in defaults) if (a.get(k).isNullOrEmpty()) a.put(k, v)
         // наши значения важнее сохранённых гостем
         for ((k, v) in overrides) a.put(k, v)
         writes = 0; rejects = 0
