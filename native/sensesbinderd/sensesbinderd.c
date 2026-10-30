@@ -645,7 +645,22 @@ static int emit_node(struct node *n, u32 *br) {
      * anything here.
      */
     int strong = n->internal_strong;
-#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
+/*
+     * Both halves of the payload carry the object pointer.
+     *
+     * This firmware's BR_ACQUIRE reads two 32-bit words and uses the second one as
+     * the object: it runs ldr r0,[r0] / subs r0,#12 / ldr r1,[r0] / add r0,r5,r1 and
+     * only then calls RefBase::incStrong, with r5 holding the second word. Handing
+     * it the guest's own cookie there means "*((void *)cookie)" — and the guest's
+     * cookies are not addresses. The last run died on exactly that, with
+     * cookie = 0xfffffff5 (an errno) dereferenced as a pointer.
+     *
+     * A cookie is an identifier the owner chose and only ever meant to hand back to
+     * itself. Nothing in the path between here and that incStrong uses it for
+     * anything else, so repeating the pointer in its place is safe, and it is what
+     * makes the acquire path work at all on this image.
+     */
+#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->ptr, 8); k += 5; } while (0)
     /*
      * BR_INCREFS does not exist in this firmware's libbinder.
      *
