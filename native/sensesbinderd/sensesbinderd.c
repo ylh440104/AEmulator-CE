@@ -168,8 +168,8 @@ static void node_work(struct node *n) {
      * published holds its own reference, so there is a BR_ACQUIRE to deliver even though neither
      * flag is set yet. The old chain of early returns saw two zero flags and gave up.
      */
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    int strong = n->internal_strong;
+    int weak = n->nrefs > 0 || strong;
     if (strong == n->has_strong && weak == n->has_weak) return;
     if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
@@ -182,7 +182,7 @@ static void node_work(struct node *n) {
 
 static void node_free_if_unused(struct node *n) {
     if (!n) return;
-    if (n->nrefs > 0 || n->internal_strong > 0 || n->local_strong > 0 || n->local_weak > 0) return;
+    if (n->nrefs > 0 || n->internal_strong > 0) return;
     if (n->has_strong || n->has_weak || n->pend_strong || n->pend_weak) return;
     if (n->queued || n->has_async) return;
     if (n->owner) {
@@ -265,6 +265,7 @@ static void ref_delete(struct ref *r) {
     r->has_death = 0;
     r->death = 0;
     r->next_in_node = 0;
+    node_work(n);
     node_free_if_unused(n);
 }
 
