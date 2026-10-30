@@ -625,11 +625,29 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
-    int strong = n->internal_strong || n->local_strong;
-    int weak = n->nrefs || n->local_weak || strong;
+    /*
+     * has_weak / has_strong say what the guest currently believes about this node.
+     *
+     * They used to be derived from counters that emit_node itself incremented
+     * (local_weak++ on INCREFS), and those counters were also read back into the
+     * test — so the condition became true on the strength of the previous send and
+     * could never go false again. The guest was told BR_INCREFS for every node it
+     * ever touched and never told BR_DECREFS for any of them: 260 INCREFS and zero
+     * DECREFS in one session. Each of those entries stays in the guest's weak
+     * reference table forever, pointing at an object the owner may since have
+     * freed; the next BR_ACQUIRE on that node runs RefBase::incStrong through a
+     * dangling mRefs and dereferences whatever the freed memory now holds.
+     *
+     * So the decision is a plain comparison between what the node needs now and
+     * what the guest already has. local_weak / local_strong still count outstanding
+     * unconfirmed sends for the accounting elsewhere, but they no longer decide
+     * anything here.
+     */
+    int strong = n->internal_strong;
+    int weak = n->nrefs > 0 || strong;
 #define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
-    if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; n->local_weak++; }
-    if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; n->local_strong++; }
+    if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; }
+    if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
     if (!weak && n->has_weak) { PUT(BR_DECREFS); n->has_weak = 0; }
 #undef PUT
