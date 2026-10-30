@@ -645,12 +645,28 @@ static int emit_node(struct node *n, u32 *br) {
      * anything here.
      */
     int strong = n->internal_strong;
-    int weak = n->nrefs > 0 || strong;
 #define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
-    if (weak && !n->has_weak) { PUT(BR_INCREFS); n->has_weak = 1; n->pend_weak = 1; }
+    /*
+     * BR_INCREFS does not exist in this firmware's libbinder.
+     *
+     * libutils.so 0x202e4 is RefBase::weakref_type::incWeak, and only two call
+     * sites reach it in the whole library — both inside AssetManager. Nothing in
+     * IPCThreadState::executeCommand calls it, and 0x80087207 (BR_INCREFS with a
+     * pointer-cookie payload) appears nowhere in the binary, while 0x80087208
+     * (BR_ACQUIRE) appears once. The command word was therefore never handled: it
+     * fell through to whatever case the compiler placed next to it, which is the
+     * acquire path, and the guest ran incStrong on a pointer that only ever
+     * carried weak references. That is the crash on 0xa9ed0911.
+     *
+     * It also explains the counters: 300 BR_INCREFS and no BR_INCREFS_DONE in a
+     * single session. The guest never acknowledged any of them, pend_weak never
+     * dropped, and node_work refused to run for those nodes forever.
+     *
+     * So for a firmware that predates weak references the only reference command
+     * worth sending is the strong one. Weak bookkeeping stays in the daemon.
+     */
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
-    if (!weak && n->has_weak) { PUT(BR_DECREFS); n->has_weak = 0; }
 #undef PUT
     return k;
 }
