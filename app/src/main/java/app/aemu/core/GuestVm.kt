@@ -487,10 +487,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 d.listFiles()?.filter { it.isFile && it.name.endsWith(".rc") } ?: emptyList()
             }
             val rcSet = InitPlan.parse(rcFiles).setprops
-            for ((k, v) in rcSet) if (!overrides.containsKey(k)) later.putIfAbsent(k, v)
-            if (rcSet.isNotEmpty()) log("init.rc: ${rcSet.size} setprop values")
+            var added = 0
+            for ((k, v) in rcSet) if (!overrides.containsKey(k)) {
+                if (later.putIfAbsent(k, v) == null) added++
+            }
+            log("init.rc: ${rcSet.size} setprop values, $added queued, later=${later.size}")
+            log("init.rc: sample " + rcSet.entries.take(3).joinToString { "${it.key}=${it.value}" })
         }
         if (!props.prepare(overrides, later, if (engine == Engine.N64) kernel.propAreaSize else PropArea.SIZE)) error("property area not ready")
+        log("props after prepare: ro.FOREGROUND_APP_ADJ=" + (props.get("ro.FOREGROUND_APP_ADJ") ?: "<absent>"))
         fixer.skipPreBoot(props)
         fixer.noScreenSleep()
         props.onSet = { k, v -> onProp(k, v) }
