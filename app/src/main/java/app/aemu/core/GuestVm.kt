@@ -461,6 +461,35 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 overrides["ro.vendor.build.fingerprint"] = fp; overrides["ro.bootimage.build.fingerprint"] = fp
             }
         }
+        /*
+         * init.rc's setprop lines have never reached the guest.
+         *
+         * The parser collects them (InitPlan.parse fills Rc.setprops), but nothing
+         * ever applied that map, so every value a firmware sets from init.rc instead
+         * of build.prop was missing at runtime. On Android 1.0 that includes the
+         * whole oom_adj table — ro.FOREGROUND_APP_ADJ and the eleven others:
+         *
+         *     setprop ro.FOREGROUND_APP_ADJ 0
+         *     ...
+         *
+         * ActivityManagerService reads those in its constructor with
+         * Integer.parseInt(SystemProperties.get(name)). An absent property gives "",
+         * parseInt throws NumberFormatException, and the exception escapes the
+         * constructor — the system server dies before it has started a single
+         * service, and the boot stops there.
+         *
+         * Applied as defaults rather than overrides so an explicit value from the
+         * settings or from props.extra still wins.
+         */
+        runCatching {
+            val rcDirs = listOf(paths.root, File(paths.root, "system/etc/init"))
+            val rcFiles = rcDirs.flatMap { d ->
+                d.listFiles()?.filter { it.isFile && it.name.endsWith(".rc") } ?: emptyList()
+            }
+            val rcSet = InitPlan.parse(rcFiles).setprops
+            for ((k, v) in rcSet) if (!overrides.containsKey(k)) later.putIfAbsent(k, v)
+            if (rcSet.isNotEmpty()) log("init.rc: ${rcSet.size} setprop values")
+        }
         if (!props.prepare(overrides, later, if (engine == Engine.N64) kernel.propAreaSize else PropArea.SIZE)) error("property area not ready")
         fixer.skipPreBoot(props)
         fixer.noScreenSleep()
