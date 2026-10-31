@@ -199,6 +199,18 @@ static struct node *node_get(struct proc *p, u64 ptr, u64 cookie, int create) {
     struct node *n = p->nodes[i];
     while (n) { if (n->ptr == ptr && n->cookie == cookie) return n; n = n->hnext; }
     if (!create) return 0;
+    if (!ptr) {
+        /*
+         * No node may exist without an object address.
+         *
+         * One did: a reference command went out carrying ptr=0, the guest ran
+         * incStrong on it and died reading *(0). Whatever path creates such a node has
+         * to be found, so say so at the point of creation with the caller's cookie,
+         * which is the one thing that identifies it.
+         */
+        logf_("binder: ★ node без адреса (cookie=0x%x) — не создаю", (unsigned)cookie);
+        return 0;
+    }
     n = zalloc(sizeof *n);
     n->owner = p;
     n->ptr = ptr;
