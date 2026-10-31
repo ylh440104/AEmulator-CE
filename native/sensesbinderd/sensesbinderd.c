@@ -703,6 +703,17 @@ static int emit_node(struct node *n, u32 *br) {
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
 #undef PUT
+    /*
+     * Say what is about to be handed to the guest as an object address.
+     *
+     * The acquire path on this firmware walks the pointer: *(ptr), -12, *(that),
+     * add, then RefBase::incStrong. If ptr is not an object the guest dies with a
+     * fault address that has no visible connection to the message that caused it,
+     * which is why this has been hard to pin down. One line per send, only while
+     * verbose is on, makes the connection direct.
+     */
+    if (k) V("emit node ptr=0x%08x cookie=0x%08x strong=%d k=%d",
+             (unsigned)n->ptr, (unsigned)n->cookie, strong, k);
     return k;
 }
 
