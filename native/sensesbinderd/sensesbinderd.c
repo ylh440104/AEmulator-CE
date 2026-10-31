@@ -423,6 +423,26 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
         struct held *h = &t->held[t->nheld];
         switch (o->type) {
         case T_BINDER: case T_WEAK_BINDER: {
+            /*
+             * A pointer that cannot be an object is refused here rather than passed on.
+             *
+             * The guest hands its object address in this field, and on this firmware that
+             * field sometimes carries something else: the run before this one had
+             * 0xfffffff8 in it, an errno, and the acquire path duly walked *0xfffffff8 and
+             * died. The value had come all the way from the guest, so no amount of fixing
+             * the send path helps — the daemon has to stop recording it in the first place.
+             *
+             * Two ranges are rejected outright: anything below 0x10000, which no object on
+             * a 32-bit image can be (the first pages belong to the loader and to null), and
+             * the top sixteen, which is where the kernel's negative errno values live. A
+             * transaction that tries to publish such a pointer is failed, and the caller
+             * sees BR_FAILED_REPLY instead of a crash much later.
+             */
+            if (o->binder < 0x10000u || o->binder >= 0xfffff000u) {
+                err("binder: ★ объект по адресу 0x%08x невозможен (cookie 0x%08x) — отказываю",
+                    o->binder, o->cookie);
+                return -1;
+            }
             struct node *nd = node_get(p, o->binder, o->cookie, 1);
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
