@@ -439,7 +439,7 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
              * sees BR_FAILED_REPLY instead of a crash much later.
              */
             if (o->binder < 0x10000u || o->binder >= 0xfffff000u) {
-                err("binder: ★ объект по адресу 0x%08x невозможен (cookie 0x%08x) — отказываю",
+                logf_("binder: ★ объект по адресу 0x%08x невозможен (cookie 0x%08x) — отказываю",
                     o->binder, o->cookie);
                 return -1;
             }
