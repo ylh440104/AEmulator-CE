@@ -93,6 +93,11 @@ class TreeFixer(
         val f = File(root, "system/lib/libpixelflinger.so")
         if (!f.isFile) return
         runCatching {
+            val orig = "engines/senses/libpixelflinger.so"
+            if (EngineAssets.size(ctx, orig) > 0) {
+                EngineAssets.open(ctx, orig).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                f.setReadable(true, false)
+            }
             val b = f.readBytes()
             var n = 0
             val pat1 = byteArrayOf(0xf9.toByte(), 0xf7.toByte(), 0x4c.toByte(), 0xfe.toByte())
