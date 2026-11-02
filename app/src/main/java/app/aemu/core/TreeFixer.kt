@@ -89,6 +89,51 @@ class TreeFixer(
 
     // ---------------------------------------------------------------- перед каждым запуском
 
+    private fun patchPixelflinger() {
+        /*
+         * libpixelflinger of this era calls a function its builder added for qemu.
+         *
+         * ARMAssembler::generate emits a block of machine code and then has to tell the
+         * translator that the page holding it is executable now:
+         *
+         *   d150: bl   ARMAssembler::base
+         *   dad6: ldr  r1, [sp, #36]        size
+         *   dad8: bl   qemu_add_mapping@plt
+         *   dadc: mvns r3, r0
+         *   dade: lsrs r0, r3, #31          r0 = (ret == 0)
+         *   dae0: strb r0, [r4, #31]        "the mapping is valid"
+         *
+         * The library names it in its own import table, so the image was built against a
+         * qemu that exported it. An unmodified qemu does not, the call resolves to
+         * nothing, the flag records a failure, and from there the code cache is
+         * inconsistent: CodeCache::lookup takes the comparator's difference — 48 in the
+         * log — as an array index and writes past the end of the vector, which is the
+         * fault at libpixelflinger +0xe042 with LR in do_compare.
+         *
+         * On the guest side these pages are ordinary anonymous memory and mprotect is
+         * what makes them executable, all of which qemu already honours. Telling it again
+         * is a no-op, so the call is replaced with "return 0" — four bytes, movs r0,#0
+         * followed by nop — and only when those four bytes are the call it expects.
+         */
+        val f = File(root, "system/lib/libpixelflinger.so")
+        if (!f.isFile) return
+        runCatching {
+            val b = f.readBytes()
+            val pat = byteArrayOf(0xf9.toByte(), 0xf7.toByte(), 0x4c.toByte(), 0xfe.toByte())
+            var hit = -1
+            for (i in 0..(b.size - 4)) {
+                if (b[i] == pat[0] && b[i + 1] == pat[1] && b[i + 2] == pat[2] && b[i + 3] == pat[3]) {
+                    hit = i
+                    break
+                }
+            }
+            if (hit < 0) return@runCatching
+            b[hit] = 0x00; b[hit + 1] = 0x20; b[hit + 2] = 0x00; b[hit + 3] = 0xbf.toByte()
+            f.writeBytes(b)
+            log("pixelflinger: qemu_add_mapping call replaced at 0x${hit.toString(16)}")
+        }
+    }
+
     /**
      * Precompiled code of 5.0+ system apps and of the framework (the odex files in oat/arm and framework/arm) is the only copy: the jars
      * and apks are stripped. installd's dexopt on a fresh /data replaced or unlinked those files inside /system
@@ -112,6 +157,7 @@ class TreeFixer(
     fun fixup(owners: Boolean = true) {
         if (owners) seedOwners()
         installEngineFiles()
+        patchPixelflinger()
         protectOat()
         fixThemeXml()
         parkWhetstone()

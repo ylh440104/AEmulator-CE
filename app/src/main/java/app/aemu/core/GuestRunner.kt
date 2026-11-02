@@ -76,7 +76,7 @@ class GuestRunner(
          * against ARMv7 and are left on qemu's default, which is what they already ran
          * with.
          */
-        if (img.api in 1..3) cmd += listOf("-cpu", "arm1136")
+        if (img.api < 4) cmd += listOf("-cpu", "arm1136")
         if (img.api < 4 && verboseLog) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
