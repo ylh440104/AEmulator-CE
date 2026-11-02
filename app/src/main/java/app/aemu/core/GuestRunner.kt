@@ -60,6 +60,23 @@ class GuestRunner(
         }
         cmd += qemu.absolutePath
         cmd += listOf("-L", paths.root.absolutePath, "-0", prog)
+        /*
+         * Pin the cpu to the one the image was built for.
+         *
+         * Without -cpu, qemu reports the union of every feature it can decode, and the
+         * old graphics stack branches on exactly that. libpixelflinger picks its
+         * scanline and clear routines from android_getCpuFeatures(), and those routines
+         * are installed as offsets from a base that the same code adds up; the wrong
+         * feature word sends it down a path whose offsets were never filled in. The
+         * result is a jump to a negative address — 0xffff1104 in the last log — with the
+         * return address inside ggl_init_scanline.
+         *
+         * ADP1 is an ARM1136-class device (HTC Dream / sapphire boards are ARM11 with
+         * VFP, no NEON), so 1.x reports and uses exactly that. Later images were built
+         * against ARMv7 and are left on qemu's default, which is what they already ran
+         * with.
+         */
+        if (img.api in 1..3) cmd += listOf("-cpu", "arm1136")
         if (img.api < 4 && verboseLog) cmd += listOf("-strace", "-D", File(paths.bin, "senses-strace.log").absolutePath)
         if (qemuLog || qemuStrace) {
             if (qemuLog) cmd += listOf("-d", "unimp,guest_errors")
