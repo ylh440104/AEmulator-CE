@@ -432,7 +432,9 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             return -1;
         }
         struct fbo *o = (struct fbo *)(data + offs[i]);
-        struct held *h = &t->held[t->nheld];
+        V("   fbo[%d] type=0x%08x binder=0x%08x cookie=0x%08x at %llu",
+          (int)i, o->type, o->binder, o->cookie, (unsigned long long)offs[i]);
+struct held *h = &t->held[t->nheld];
         switch (o->type) {
         case T_BINDER: case T_WEAK_BINDER: {
             /*
@@ -459,14 +461,33 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
-             * The owner just handed its own object to a parcel, so it holds a reference of its own
-             * to that object. Without recording it the node looks unreferenced, emit_node sends it
-             * BR_RELEASE/BR_DECREFS, and the owner frees the very object the parcel still carries —
-             * which is how getService("power") came back with a T_BINDER whose memory was already
-             * gone, and system_server died on it. The count belongs to the node, not to the parcel,
-             * so it is raised once when the node first appears.
+             * Publishing an object is not the same as somebody taking a reference to it.
+             *
+             * This block used to raise internal_strong here, reasoning that the owner had put its
+             * own object into a parcel and therefore held a reference of its own that the daemon
+             * had to keep alive. That reasoning matches the current AOSP parcel, which does
+             * incStrong when it flattens a strong binder, and it does not match this image.
+             *
+             * flatten_binder here writes two words and calls incStrong on neither:
+             *
+             *   31c48: subs r5, #12          r5 = obj - 12
+             *   31c4a: ldr  r2, [r5]
+             *   31c4c: adds r0, r4, r2
+             *   31c4e: bl   RefBase::getWeakRefs
+             *   31c52: str  r4, [sp, #12]    flat_binder_object.binder = obj
+             *   31c54: str  r0, [sp, #8]     .cookie = weakref_type*
+             *
+             * So a published object gains no reference at all, and no BC_FREE_BUFFER ever follows
+             * for it — not one arrived in a whole session. Keeping internal_strong up from here
+             * meant the daemon held a strong reference on the guest's behalf that the guest never
+             * agreed to: the owner finished its call, dropped its own sp<>, the object was
+             * destroyed, and the next BR_ACQUIRE ran incStrong over freed memory. That is the
+             * fault on 0x000ee680, whose first word had been overwritten with 6.
+             *
+             * The acquire is raised later, at the point where a handle to this node is actually
+             * handed to somebody (T_HANDLE below), which is when the object has a real holder.
              */
-            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
+            (void)0;
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -659,6 +680,22 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
     /*
+     * A queued node has to still be alive when its turn comes.
+     *
+     * W_NODE carries a bare pointer, and node_free_if_unused is free to release the
+     * node between the moment the work item is queued and the moment this runs. What
+     * arrives here then is memory that no longer belongs to us: ptr and cookie read as
+     * zero, so a reference command goes out naming 0 as an object and the guest dies
+     * reading *(0). That is the fault this image has been dying on.
+     *
+     * A live node always has an owner. Checking it costs one compare and turns the
+     * crash into a skipped message.
+     */
+    if (!n || !n->owner || !n->ptr) {
+        logf_("binder: ★ узел в очереди мёртв (n=%p) — пропускаю", (void *)n);
+        return 0;
+    }
+    /*
      * has_weak / has_strong say what the guest currently believes about this node.
      *
      * They used to be derived from counters that emit_node itself incremented
@@ -678,21 +715,28 @@ static int emit_node(struct node *n, u32 *br) {
      */
     int strong = n->internal_strong;
 /*
-     * Both halves of the payload carry the object pointer.
+     * The payload is {ptr, cookie} — the standard pair.
      *
-     * This firmware's BR_ACQUIRE reads two 32-bit words and uses the second one as
-     * the object: it runs ldr r0,[r0] / subs r0,#12 / ldr r1,[r0] / add r0,r5,r1 and
-     * only then calls RefBase::incStrong, with r5 holding the second word. Handing
-     * it the guest's own cookie there means "*((void *)cookie)" — and the guest's
-     * cookies are not addresses. The last run died on exactly that, with
-     * cookie = 0xfffffff5 (an errno) dereferenced as a pointer.
+     * The cookie is not an arbitrary identifier on this image. flatten_binder fills it
+     * with RefBase::getWeakRefs(), so it is the object's own mRefs pointer:
      *
-     * A cookie is an identifier the owner chose and only ever meant to hand back to
-     * itself. Nothing in the path between here and that incStrong uses it for
-     * anything else, so repeating the pointer in its place is safe, and it is what
-     * makes the acquire path work at all on this image.
+     *   31c4e: bl   RefBase::getWeakRefs
+     *   31c52: str  r4, [sp, #12]     .binder = obj
+     *   31c54: str  r0, [sp, #8]      .cookie = weakref_type*
+     *
+     * And the acquire path reads exactly that back out of the object:
+     *
+     *   2d548: r5 = *(parcel + 4)                    second word = ptr
+     *   2d54a: r0 = *(r5)                            mRefs
+     *   2d54e: r0 = mRefs - 12
+     *   2d550: r1 = *(mRefs - 12)                    vtable slot
+     *   2d556: incStrong(ptr + r1, ptr)
+     *
+     * So *(ptr) must equal the cookie for the object to still be the one the guest
+     * published. Repeating the pointer in the cookie slot threw that check away; the
+     * shim now compares the two and drops the command when they differ.
      */
-#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->ptr, 8); k += 5; } while (0)
+#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
     /*
      * BR_INCREFS does not exist in this firmware's libbinder.
      *
@@ -712,6 +756,22 @@ static int emit_node(struct node *n, u32 *br) {
      * So for a firmware that predates weak references the only reference command
      * worth sending is the strong one. Weak bookkeeping stays in the daemon.
      */
+    if (n->nrefs <= 0) {
+        /*
+         * Nobody holds this node any more, so there is nothing left to protect.
+         *
+         * internal_strong exists to keep the owner's object alive while other processes hold
+         * handles to it. It is raised when the object is published and stays up until the last
+         * handle goes away. If every reference is gone before the acquire has been delivered,
+         * the owner has already dropped its own sp<> and the object is being destroyed this
+         * instant — running incStrong on it now walks freed memory. The last run died exactly
+         * so, on ptr=0x000ee680 whose first word had already been overwritten with 6.
+         *
+         * Dropping the acquire in that case is not a leak: there is no object left to keep.
+         */
+        n->internal_strong = 0;
+        strong = 0;
+    }
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
 #undef PUT
