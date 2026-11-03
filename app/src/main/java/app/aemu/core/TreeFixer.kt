@@ -110,9 +110,6 @@ class TreeFixer(
             }
             val o2 = 0xadf4
             if (o2 + 4 <= b.size && b[o2] == 0x0b.toByte() && b[o2 + 1] == 0x00.toByte() && b[o2 + 2] == 0x00.toByte() && b[o2 + 3] == 0x0a.toByte()) {
-                b[o2 + 3] = 0xea.toByte()
-                log("pixelflinger: scanline VFP/NEON branch made unconditional at 0x${o2.toString(16)}")
-                n++
             }
             if (n > 0) f.writeBytes(b)
         }
