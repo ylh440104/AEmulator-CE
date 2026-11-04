@@ -97,21 +97,8 @@ class TreeFixer(
             if (EngineAssets.size(ctx, orig) > 0) {
                 EngineAssets.open(ctx, orig).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
                 f.setReadable(true, false)
+                log("pixelflinger: restored from assets (qemu_add_mapping pre-patched)")
             }
-            val b = f.readBytes()
-            var n = 0
-            val pat1 = byteArrayOf(0xf9.toByte(), 0xf7.toByte(), 0x4c.toByte(), 0xfe.toByte())
-            for (i in 0..(b.size - 4)) {
-                if (b[i] == pat1[0] && b[i + 1] == pat1[1] && b[i + 2] == pat1[2] && b[i + 3] == pat1[3]) {
-                    b[i] = 0x00; b[i + 1] = 0x20; b[i + 2] = 0x00; b[i + 3] = 0xbf.toByte()
-                    log("pixelflinger: qemu_add_mapping call replaced at 0x${i.toString(16)}")
-                    n++; break
-                }
-            }
-            val o2 = 0xadf4
-            if (o2 + 4 <= b.size && b[o2] == 0x0b.toByte() && b[o2 + 1] == 0x00.toByte() && b[o2 + 2] == 0x00.toByte() && b[o2 + 3] == 0x0a.toByte()) {
-            }
-            if (n > 0) f.writeBytes(b)
         }
     }
 
