@@ -369,7 +369,7 @@ enum class Kernel64(
     A12("31", 31..31, derivedIdentity = true, gpuBridge64 = true, oneIncludePolicy = true, webViewSingleProcess = true, registeredNetwork = true, treble = true, eglDir = "vendor/lib64/egl", gles = "2",
         absentFeatures = listOf("consumerir", "fingerprint", "nfc", "nfc.hce", "nfc.hcef", "bluetooth", "bluetooth_le"), trafficAccounting = true, noQemuPipe = true, binderVold = true,
         // (12 has no VNDK 27 any more: the 8.1 vendor side links against the oldest one there is)
-        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1",
+        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1", "ro.vendor.api_level" to "27",
             "ro.apex.updatable" to "false", "dalvik.vm.jdwp-provider" to "none", "ro.property_service.version" to "2",
             "persist.zygote.app_data_isolation" to "false",
             // (a vendor's firmware: as on 11)
@@ -388,7 +388,7 @@ enum class Kernel64(
     A13("33", 33..33, volumeAtUserStart = true, derivedIdentity = true, oneIncludePolicy = true, webViewSingleProcess = true, registeredNetwork = true, treble = true, eglDir = "vendor/lib64/egl", gles = "2",
         absentFeatures = listOf("consumerir", "fingerprint", "nfc", "nfc.hce", "nfc.hcef", "bluetooth", "bluetooth_le"), trafficAccounting = true, noQemuPipe = true, binderVold = true,
         // (12 has no VNDK 27 any more: the 8.1 vendor side links against the oldest one there is)
-        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1",
+        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1", "ro.vendor.api_level" to "27",
             "ro.apex.updatable" to "false", "dalvik.vm.jdwp-provider" to "none", "ro.property_service.version" to "2",
             "persist.zygote.app_data_isolation" to "false",
             // (a vendor's firmware: as on 11)
@@ -407,7 +407,7 @@ enum class Kernel64(
     A14("34", 34..34, volumeAtUserStart = true, derivedIdentity = true, oneIncludePolicy = true, webViewSingleProcess = true, registeredNetwork = true, treble = true, eglDir = "vendor/lib64/egl", gles = "2",
         absentFeatures = listOf("consumerir", "fingerprint", "nfc", "nfc.hce", "nfc.hcef", "bluetooth", "bluetooth_le"), trafficAccounting = true, noQemuPipe = true, binderVold = true,
         // (12 has no VNDK 27 any more: the 8.1 vendor side links against the oldest one there is)
-        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1",
+        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1", "ro.vendor.api_level" to "27",
             "ro.apex.updatable" to "false", "dalvik.vm.jdwp-provider" to "none", "ro.property_service.version" to "2",
             "persist.zygote.app_data_isolation" to "false",
             // (a vendor's firmware: as on 11)
@@ -437,7 +437,7 @@ enum class Kernel64(
     A15("35", 35..35, volumeAtUserStart = true, derivedIdentity = true, oneIncludePolicy = true, webViewSingleProcess = true, registeredNetwork = true, treble = true, eglDir = "vendor/lib64/egl", gles = "2",
         absentFeatures = listOf("consumerir", "fingerprint", "nfc", "nfc.hce", "nfc.hcef", "bluetooth", "bluetooth_le"), trafficAccounting = true, noQemuPipe = true, binderVold = true,
         // (12 has no VNDK 27 any more: the 8.1 vendor side links against the oldest one there is)
-        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1",
+        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1", "ro.vendor.api_level" to "27",
             "ro.apex.updatable" to "false", "dalvik.vm.jdwp-provider" to "none", "ro.property_service.version" to "2",
             "persist.zygote.app_data_isolation" to "false",
             // (a vendor's firmware: as on 11)
@@ -477,7 +477,7 @@ enum class Kernel64(
     A16("36", 36..36, volumeAtUserStart = true, derivedIdentity = true, oneIncludePolicy = true, webViewSingleProcess = true, registeredNetwork = true, treble = true, eglDir = "vendor/lib64/egl", gles = "2",
         absentFeatures = listOf("consumerir", "fingerprint", "nfc", "nfc.hce", "nfc.hcef", "bluetooth", "bluetooth_le"), trafficAccounting = true, noQemuPipe = true, binderVold = true,
         // (12 has no VNDK 27 any more: the 8.1 vendor side links against the oldest one there is)
-        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1",
+        props = mapOf("ro.treble.enabled" to "false", "bpf.progs_loaded" to "1", "ro.product.first_api_level" to "27", "debug.stagefright.c2inputsurface" to "1", "ro.vendor.api_level" to "27",
             "ro.apex.updatable" to "false", "dalvik.vm.jdwp-provider" to "none", "ro.property_service.version" to "2",
             "persist.zygote.app_data_isolation" to "false",
             // (a vendor's firmware: as on 11)
