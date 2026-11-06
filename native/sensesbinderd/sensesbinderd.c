@@ -36,6 +36,11 @@ struct fbo { u32 type, flags; u32 binder; u32 cookie; };
 
 struct proc; struct thread; struct node;
 
+/* the thread whose ioctl is being answered (see the definition further down) */
+struct thread;
+static struct thread *g_cur_th;
+static int emit_node(struct node *n, u32 *br);
+
 enum { W_TXN = 1, W_COMPLETE, W_NODE, W_DEAD_BINDER, W_CLEAR_DONE, W_ERROR, W_ACK, W_SPAWN };
 
 struct work { struct work *next; int type; struct txn *t; struct node *node; u64 cookie; u32 err; u32 ack_type; };
@@ -243,30 +248,33 @@ static void ref_add_node(struct ref *r, struct node *n) {
 static struct ref *ref_for_node(struct proc *p, struct node *n) {
     for (struct ref *r = n->refs; r; r = r->next_in_node) if (r->proc == p) return r;
     if (p->nrefs == 0) {
-        p->refs = zalloc(sizeof(struct ref *) * 64);
-        p->nrefs = 64;
-        for (u32 i = 0; i < p->nrefs; i++) {
-            p->refs[i] = zalloc(sizeof(struct ref));
-            p->refs[i]->proc = p;
-            p->refs[i]->desc = i;
-        }
+        /* descriptor 0 is the context manager and is never handed out */
+        p->refs = zalloc(sizeof(struct ref *) * 2);
+        p->refs[0] = zalloc(sizeof(struct ref));
+        p->refs[0]->proc = p;
+        p->refs[0]->desc = 0;
+        p->nrefs = 1;
     }
-    struct ref *free_ref = 0;
-    for (u32 i = 1; i < p->nrefs; i++) {
-        struct ref *c = p->refs[i];
-        if (!c->node) { free_ref = c; break; }
-    }
-    if (!free_ref) {
-        u32 old = p->nrefs;
-        p->nrefs *= 2;
-        p->refs = realloc(p->refs, sizeof(struct ref *) * p->nrefs);
-        for (u32 i = old; i < p->nrefs; i++) {
-            p->refs[i] = zalloc(sizeof(struct ref));
-            p->refs[i]->proc = p;
-            p->refs[i]->desc = i;
-        }
-        free_ref = p->refs[old];
-    }
+    /*
+     * A handle is never reused for a different object.
+     *
+     * libbinder caches handle -> BpBinder inside ProcessState and only drops an entry when
+     * the weak reference behind it fails to revive. Handing the same number to another
+     * node while that cache still holds the old BpBinder makes every later transaction on
+     * that handle reach the wrong object — and, once the cached one has been destroyed, an
+     * incStrong over freed memory, which is the fault at 0x20306.
+     *
+     * kernel keeps the number bound for as long as the process holds a reference, so this
+     * table only grows. A boot allocates a few hundred entries; the reuse it replaces
+     * bought nothing.
+     */
+    u32 d = p->nrefs;
+    p->nrefs = d + 1;
+    p->refs = realloc(p->refs, sizeof(struct ref *) * p->nrefs);
+    struct ref *free_ref = zalloc(sizeof(struct ref));
+    free_ref->proc = p;
+    free_ref->desc = d;
+    p->refs[d] = free_ref;
     ref_add_node(free_ref, n);
     return free_ref;
 }
@@ -470,7 +478,26 @@ struct held *h = &t->held[t->nheld];
                     o->binder, o->cookie);
                 return -1;
             }
-            struct node *nd = node_get(p, o->binder, o->cookie, 1);
+            /*
+             * The object address is in .cookie; .binder holds getWeakRefs().
+             *
+             * This image's flatten_binder writes the two in that order:
+             *
+             *   31c52: str r4, [sp, #12]     .cookie = the object
+             *   31c54: str r0, [sp, #8]      .binder = getWeakRefs()
+             *
+             * and unflatten_binder of this era reads a BINDER_TYPE_BINDER back with
+             * "*out = static_cast<IBinder*>(flat->cookie)".
+             *
+             * The daemon used .binder as the object address, so every BR_ACQUIRE told the
+             * owner to incStrong a weakref_impl: *(weakrefs) is a vtable pointer, -12 lands
+             * in front of it, and the fault is at libutils +0x20306. That is the crash every
+             * round has been chasing.
+             *
+             * The node is keyed by both fields, so the pair stays unique; only which one is
+             * treated as the object changes.
+             */
+            struct node *nd = node_get(p, o->cookie, o->binder, 1);
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
@@ -489,7 +516,32 @@ struct held *h = &t->held[t->nheld];
              * The shim cannot filter this out by looking at the object first: it checks when
              * the message arrives, and the guest acts on it some time later.
              */
-            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
+            if (nd && nd->nrefs == 1 && !nd->internal_strong) {
+                nd->internal_strong = 1;
+                /*
+                 * Hand the acquire to the owner right now, as the kernel does, instead of
+                 * queueing it. The node is the one the owner just published, so the object
+                 * is certainly alive at this point: it goes out with this ioctl's answer.
+                 */
+                V("   T_BINDER obj=0x%x wr=0x%x cur_th=%p cur_proc=%p p=%p has_strong=%d",
+                  (unsigned)o->cookie, (unsigned)o->binder,
+                  (void *)g_cur_th, g_cur_th ? (void *)g_cur_th->proc : 0, (void *)p, nd->has_strong);
+                if (g_cur_th && g_cur_th->proc == p && !nd->has_strong) {
+                    V("   -> immediate acquire");
+                    u32 br2[8];
+                    int k2 = emit_node(nd, br2);
+                    if (k2 >= 5) {
+                        struct sb_ptr_cookie pc1;
+                        pc1.op = (br2[0] == BR_ACQUIRE) ? SB_REF_ACQUIRE : SB_REF_RELEASE;
+                        pc1.pad = 0;
+                        memcpy(&pc1.ptr, br2 + 1, 8);
+                        memcpy(&pc1.cookie, br2 + 3, 8);
+                        sb_send(g_cur_th, SB_R_REF, &pc1, sizeof pc1, 0, 0, 0);
+                    }
+                } else {
+                    node_work(nd);
+                }
+            }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -588,6 +640,8 @@ static void parcel_dump(const char *data, u64 size, char *out, size_t cap) {
 
 static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int *fds, int nfds, int reply) {
     struct proc *p = th->proc;
+    /* the answer to this ioctl is being built on this thread: see g_cur_th */
+    g_cur_th = th;
     struct txn *t = zalloc(sizeof *t);
     t->memfd = -1;
     t->code = m->code; t->flags = m->flags; t->reply = reply;
@@ -691,6 +745,18 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     queue_txn(t, target_thread);
     if (reply && in_reply_to) { in_reply_to->from = 0; txn_free(in_reply_to); }
 }
+
+/*
+ * The thread whose ioctl is being answered right now.
+ *
+ * kernel sends BR_ACQUIRE for a freshly published object inside the very same
+ * BINDER_WRITE_READ that carried the transaction, so the owner runs incStrong before its
+ * own sp<> has a chance to drop. The daemon used to queue that command and deliver it on
+ * a later pass, which left a window: the owner released the object first and the acquire
+ * then ran incStrong over freed memory. Sending it here, on the answering thread, closes
+ * that window.
+ */
+static struct thread *g_cur_th;
 
 static int emit_node(struct node *n, u32 *br) {
     int k = 0;
