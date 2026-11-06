@@ -556,7 +556,7 @@ struct held *h = &t->held[t->nheld];
              * android.app.ApplicationThreadProxy@... (pid=6082) when registering receiver".
              * The kernel hands the original pointer back for exactly this reason.
              */
-            if (nd->owner == to) {
+            if (nd->owner && nd->owner->pid == to->pid) {
                 o->type = strong ? T_BINDER : T_WEAK_BINDER;
                 o->binder = (u32)nd->cookie;
                 o->cookie = (u32)nd->ptr;
