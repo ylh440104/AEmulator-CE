@@ -308,13 +308,29 @@ class Importer(
                     gotSystem = true
                 }
                 base.equals("boot.img", true) || inFw && base.matches(Regex("(?i)boot(_a)?\\.img")) ||
-                base.matches(Regex("(?i)boot(_signed)?")) ->
+                base.matches(Regex("(?i)boot(_signed)?")) ||
+                    base.equals("kernel-qemu", true) || base.equals("kernel", true) ->
                     zip.getInputStream(e).use { takeBoot(it.readBytes()) }
                 base.equals("recovery.img", true) || inFw && base.matches(Regex("(?i)recovery(_a)?\\.img")) ||
                 base.matches(Regex("(?i)recovery(_signed)?")) ->
                     if (e.size < 512_000_000) zip.getInputStream(e).use { recovery = it.readBytes() }
                 inFw && base.matches(Regex("(?i)super(\\.sparse)?\\.img")) -> withEntrySource(zip, e) { importImage(it, "system") }
                 base.matches(Regex("(?i)system(_signed)?")) -> withEntrySource(zip, e) { importImage(it, "system") }
+                /*
+                 * system.img as a plain entry of the archive.
+                 *
+                 * Earlier releases only recognised the image when it came through a tar, a
+                 * compression stream or one of the vendor paths below; a zip that simply
+                 * carries system.img at some depth was rejected with "no Android system
+                 * partition found". The SDK packages of the 1.x era are exactly that shape:
+                 *
+                 *   android-sdk-linux_x86-1.0_r2/tools/lib/images/system.img
+                 *
+                 * and the same holds for any hand-made zip of a firmware. The name is
+                 * matched with SYSTEM_IMAGE, the pattern the tar paths already use
+                 * (system.img, system.ext4.img, factoryfs.img, system.yaffs2, super.img...).
+                 */
+                base.matches(SYSTEM_IMAGE) -> withEntrySource(zip, e) { importImage(it, "system") }
                 inFw && base.matches(Regex("(?i)(system|vendor|product|system_ext|odm)(\\.sparse)?\\.img")) -> {
                     val part = base.substringBefore('.').lowercase()
                     withEntrySource(zip, e) {
