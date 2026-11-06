@@ -557,6 +557,9 @@ struct held *h = &t->held[t->nheld];
              * The kernel hands the original pointer back for exactly this reason.
              */
             if (nd->owner && nd->owner->pid == to->pid) {
+                V("   home: obj=0x%x wr=0x%x owner=%d to=%d code=%u",
+                  (unsigned)nd->ptr, (unsigned)nd->cookie,
+                  nd->owner ? nd->owner->pid : 0, to->pid, (unsigned)t->code);
                 o->type = strong ? T_BINDER : T_WEAK_BINDER;
                 o->binder = (u32)nd->cookie;
                 o->cookie = (u32)nd->ptr;
