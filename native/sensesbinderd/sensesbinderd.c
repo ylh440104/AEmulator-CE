@@ -865,8 +865,9 @@ static int emit_node(struct node *n, u32 *br) {
      * which is why this has been hard to pin down. One line per send, only while
      * verbose is on, makes the connection direct.
      */
-    if (k) V("emit node ptr=0x%08x cookie=0x%08x strong=%d k=%d",
-             (unsigned)n->ptr, (unsigned)n->cookie, strong, k);
+    if (k) V("emit node ptr=0x%08x cookie=0x%08x strong=%d k=%d br=[%08x %08x %08x %08x %08x]",
+             (unsigned)n->ptr, (unsigned)n->cookie, strong, k,
+             br[0], br[1], br[2], br[3], br[4]);
     return k;
 }
 
@@ -936,8 +937,24 @@ static void deliver(struct thread *th) {
     int have_spawn = 0;
 
     for (;;) {
-        struct wq *q = th->todo.head ? &th->todo : &p->todo;
-        struct work *w = wq_pop(q);
+        /*
+         * A freshly spawned pool thread takes transactions, not reference commands.
+         *
+         * The node work lives on the process queue, so any thread of the process could
+         * pick it up — including one that libbinder has only just started, whose view of
+         * the engine's buffers is the one its first ioctl builds. Handing such a thread a
+         * BR_ACQUIRE put it into executeCommand with a pointer it had never seen accepted,
+         * and the fault surfaced in joinThreadPool of that very thread:
+         *
+         *   androidCreateRawThreadEtc -> Thread::_threadLoop -> spawnPooledThread
+         *     -> IPCThreadState::joinThreadPool -> executeCommand
+         *
+         * Reference commands therefore go to the main thread only; the process queue is
+         * reached from it alone. Transactions stay available to every thread, which is
+         * what the pool is for.
+         */
+        struct wq *q = th->todo.head ? &th->todo : (th->is_main ? &p->todo : 0);
+        struct work *w = q ? wq_pop(q) : 0;
         if (!w) break;
         switch (w->type) {
         case W_COMPLETE:
