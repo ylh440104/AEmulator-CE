@@ -692,7 +692,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
         if (!glDone) glUp()
         log("system started: ${alive().joinToString()}")
-        log("api=${img.api} engine=${img.engine} cpu=${if (img.api < 4) "arm926" else "default"}")
+        log("api=${img.api} engine=${img.engine} cpu=${if (img.api < 4) "arm926" else "default"} qemu=${overrides["ro.kernel.qemu"]}")
         watchdog()
     }
 

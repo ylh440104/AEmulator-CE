@@ -96,6 +96,30 @@ class TreeFixer(
      * (a real /system is read-only), and the next boot died in system_server with "No original dex files found".
      * Taking the write bit away makes such writes fail harmlessly; ImageStore.wipe gives it back before deleting.
      */
+    private fun restorePixelflinger() {
+        val f = File(root, "system/lib/libpixelflinger.so")
+        if (!f.isFile) return
+        runCatching {
+            val asset = "engines/senses/libpixelflinger.so"
+            val len = EngineAssets.size(ctx, asset)
+            if (len <= 0) return@runCatching
+            if (f.length() == len) {
+                val same = runCatching {
+                    java.security.MessageDigest.getInstance("MD5").let { md ->
+                        val a = md.digest(f.readBytes())
+                        md.reset()
+                        val b = md.digest(EngineAssets.open(ctx, asset).use { it.readBytes() })
+                        a.contentEquals(b)
+                    }
+                }.getOrDefault(false)
+                if (same) return@runCatching
+            }
+            EngineAssets.open(ctx, asset).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+            f.setReadable(true, false)
+            log("pixelflinger: restored original (was damaged by an earlier build)")
+        }
+    }
+
     private fun protectOat() {
         val sys = File(root, "system")
         var n = 0
@@ -113,6 +137,7 @@ class TreeFixer(
     fun fixup(owners: Boolean = true) {
         if (owners) seedOwners()
         installEngineFiles()
+        restorePixelflinger()
         protectOat()
         fixThemeXml()
         parkWhetstone()
