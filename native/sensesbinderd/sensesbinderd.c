@@ -173,9 +173,23 @@ static void node_work(struct node *n) {
      * published holds its own reference, so there is a BR_ACQUIRE to deliver even though neither
      * flag is set yet. The old chain of early returns saw two zero flags and gave up.
      */
+    /*
+     * internal_strong mirrors "some handle still points at this node", and nrefs is that
+     * count, so the two have to move together. It used to be raised at publish time and
+     * never lowered, which left has_strong stuck at 1: the daemon sent 788 BR_ACQUIRE and
+     * not a single BR_RELEASE in a whole session, every JavaBBinder kept a strong count it
+     * should have given back, and the pool thread later walked a wp<> that had already been
+     * cut loose — the fault at libandroid_runtime +0x3688a over a null object.
+     */
     int strong = n->internal_strong;
     int weak = n->nrefs > 0 || strong;
-    if (strong == n->has_strong && weak == n->has_weak) return;
+    /*
+     * A node that lost its last handle still owes the owner a BR_RELEASE, so it must not be
+     * skipped here. emit_node turns strong off in that case and sends the release; returning
+     * early because the flag happens to match is what kept has_strong stuck at 1 for a whole
+     * session.
+     */
+    if (strong == n->has_strong && weak == n->has_weak && !(n->has_strong && n->nrefs <= 0)) return;
     if (n->pend_strong > 0 || n->pend_weak > 0) return;
     if (!n->owner->threads) return;
     struct work *w = mkwork(W_NODE);
