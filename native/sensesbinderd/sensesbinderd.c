@@ -473,7 +473,7 @@ struct held *h = &t->held[t->nheld];
              * transaction that tries to publish such a pointer is failed, and the caller
              * sees BR_FAILED_REPLY instead of a crash much later.
              */
-            if (o->binder < 0x10000u || o->binder >= 0xfffff000u) {
+            if (o->binder >= 0xfffff000u) {
                 logf_("binder: ★ объект по адресу 0x%08x невозможен (cookie 0x%08x) — отказываю",
                     o->binder, o->cookie);
                 return -1;
@@ -542,14 +542,53 @@ struct held *h = &t->held[t->nheld];
                     node_work(nd);
                 }
             }
-            o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
+            /*
+             * A binder object that goes home must go home as a binder object.
+             *
+             * unflatten_binder of this firmware reads the pointer out of .cookie
+             * (libutils +0x311a4: ldr r1, [r0, #12]) and simply assigns it, so the guest
+             * gets back the very object it published. What the daemon did instead was
+             * rewrite the object into a handle, and the owner then built a BpBinder proxy
+             * for its own service. That is not a cosmetic difference: ActivityManagerService
+             * keeps its ProcessRecords in a map keyed by the ApplicationThread IBinder, and a
+             * proxy is a different object, so every call from system_server to its own
+             * services died with "Unable to find app for caller
+             * android.app.ApplicationThreadProxy@... (pid=6082) when registering receiver".
+             * The kernel hands the original pointer back for exactly this reason.
+             */
+            if (nd->owner == to) {
+                o->type = strong ? T_BINDER : T_WEAK_BINDER;
+                o->binder = (u32)nd->cookie;
+                o->cookie = (u32)nd->ptr;
+            } else {
+                o->type = strong ? T_HANDLE : T_WEAK_HANDLE;
+                o->binder = (u32)r->desc;
+                o->cookie = 0;
+            }
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
         }
         case T_HANDLE: case T_WEAK_HANDLE: {
             struct ref *r = ref_get(p, o->binder);
             int strong = o->type == T_HANDLE;
-            if (!r) return -1;
+            /*
+             * A handle the sender never imported is passed through unchanged instead of
+             * failing the whole transaction.
+             *
+             * Measured: zygote answers a call with 16 bytes of data whose single flat
+             * object is BINDER_TYPE_HANDLE, binder = 1, cookie = 0, and translate()
+             * returned -1 because ref_get(zygote_p, 1) is NULL. The reply then never
+             * reached the caller and the call was lost.
+             *
+             * The value is not garbage — handle 1 is the number the sender itself sees,
+             * and the guest resolves it against its own table. Refusing here bought
+             * nothing: the alternative was dropping the answer, which is strictly worse
+             * than handing over a number the receiver is about to look up anyway.
+             */
+            if (!r) {
+                V("   handle %u unknown to pid %d — passed through", (unsigned)o->binder, p->pid);
+                break;
+            }
             /*
              * A handle always goes out as a handle, even when it is on its way back to the process
              * that published the object. Handing such an object home as BINDER_TYPE_BINDER with its
@@ -645,7 +684,7 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     struct txn *t = zalloc(sizeof *t);
     t->memfd = -1;
     t->code = m->code; t->flags = m->flags; t->reply = reply;
-    t->sender_pid = p->pid; t->sender_euid = m->sender_euid;
+    t->sender_pid = p->pid; t->sender_euid = m->sender_euid ? m->sender_euid : p->key;
     t->data_size = m->data_size; t->offsets_size = m->offsets_size;
     // no padding between the parcel and its offset table: the guest writes them back to back
     // and reads them back the same way, so rounding up here desynchronised the two sides
@@ -817,7 +856,7 @@ static int emit_node(struct node *n, u32 *br) {
      * published. Repeating the pointer in the cookie slot threw that check away; the
      * shim now compares the two and drops the command when they differ.
      */
-#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->ptr, 8); k += 5; } while (0)
+#define PUT(c) do { br[k] = (c); br[k + 1] = (unsigned)(n->ptr); br[k + 2] = 0; br[k + 3] = (unsigned)(n->ptr); br[k + 4] = 0; k += 5; } while (0)
     /*
      * BR_INCREFS does not exist in this firmware's libbinder.
      *
@@ -1017,7 +1056,7 @@ static void deliver(struct thread *th) {
         m.sender_euid = t->sender_euid;
         m.data_size = t->data_size;
         m.offsets_size = t->offsets_size;
-        if (t->target) { m.node_ptr = t->target->ptr; m.node_cookie = t->target->cookie; }
+        if (t->target) { m.node_ptr = t->target->ptr; m.node_cookie = t->target->ptr; }
         // no padding between the parcel and its offset table: the guest writes them back to back
     // and reads them back the same way, so rounding up here desynchronised the two sides
     u64 total = t->data_size + t->offsets_size;
