@@ -278,7 +278,19 @@ static void ref_add_node(struct ref *r, struct node *n) {
 }
 
 static struct ref *ref_for_node(struct proc *p, struct node *n) {
-    for (struct ref *r = n->refs; r; r = r->next_in_node) if (r->proc == p) return r;
+    /*
+     * Match on pid, not on the struct proc pointer.
+     *
+     * A process can hold more than one binder connection — a fresh one is opened when the old
+     * one is dropped — and each gets its own struct proc. Looking only for the same pointer
+     * therefore missed the ref an earlier connection had already been given for this node,
+     * allocated a second one, and handed out a handle number that the guest had already been
+     * told means something else. Measured: getService answered with handle 1, which in
+     * surfaceflinger is its own IServiceManager, so the client resolved SurfaceFlinger to the
+     * wrong object and reported "not published, waiting..." forever.
+     */
+    for (struct ref *r = n->refs; r; r = r->next_in_node)
+        if (r->proc && r->proc->pid == p->pid) return r;
     if (p->nrefs == 0) {
         /* descriptor 0 is the context manager and is never handed out */
         p->refs = zalloc(sizeof(struct ref *) * 2);
@@ -613,12 +625,16 @@ struct held *h = &t->held[t->nheld];
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE;
             o->binder = (u32)r->desc;
             o->cookie = 0;
+            V("   fbo out: type=0x%x binder=%u cookie=0x%x -> pid %d code %u",
+              o->type, (unsigned)o->binder, (unsigned)o->cookie, to->pid, (unsigned)t->code);
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
         }
         case T_HANDLE: case T_WEAK_HANDLE: {
             struct ref *r = ref_get(p, o->binder);
             int strong = o->type == T_HANDLE;
+            logf_("binder: HANDLE-IN pid %d desc %u -> %s (to=%d code=%u)",
+                  p->pid, (unsigned)o->binder, r ? "resolved" : "MISS", to->pid, (unsigned)t->code);
             /*
              * A handle the sender never imported is passed through unchanged instead of
              * failing the whole transaction.
@@ -646,7 +662,30 @@ struct held *h = &t->held[t->nheld];
              * (media.*, SurfaceFlinger, IMemoryHeap) goes out as a handle and works, so the home case
              * stops being special.
              */
+            /*
+             * A handle that lands back on the process that published the object goes home as
+             * the object itself.
+             *
+             * Measured: servicemanager answered getService("SurfaceFlinger") with handle 1, the
+             * daemon resolved it to the node owned by pid 7619, and the receiver was pid 7619 —
+             * surfaceflinger asking for its own service. Allocating a fresh handle there returned
+             * the object to its owner as a BpBinder proxy, so SurfaceComposerClient kept printing
+             * "SurfaceFlinger not published, waiting..." even though the lookup had succeeded.
+             * The kernel hands the pointer back whenever target_node->proc == t->from->proc.
+             */
+            if (r->node->owner && r->node->owner->pid == to->pid) {
+                o->type = strong ? T_BINDER : T_WEAK_BINDER;
+                o->binder = (u32)r->node->cookie;
+                o->cookie = (u32)r->node->ptr;
+                ref_inc_home(t, r->node, strong);
+                logf_("binder: HANDLE-HOME pid %d desc %u -> pid %d obj=0x%x code %u",
+                      p->pid, (unsigned)o->binder, to->pid, (unsigned)o->cookie, (unsigned)t->code);
+                break;
+            }
             struct ref *nr = ref_for_node(to, r->node);
+            logf_("binder: HANDLE-OUT pid %d desc %u -> pid %d desc %u (node of %d) code %u",
+                  p->pid, (unsigned)o->binder, to->pid, (unsigned)nr->desc,
+                  r->node->owner ? r->node->owner->pid : 0, (unsigned)t->code);
             o->binder = (u32)nr->desc; o->cookie = 0;
             ref_inc(nr, strong); h->ref = nr; h->strong = strong; t->nheld++;
             if (strong && r->node->owner) { r->node->internal_strong = 1; node_work(r->node); }
@@ -859,10 +898,16 @@ static int emit_node(struct node *n, u32 *br) {
      * A live node always has an owner. Checking it costs one compare and turns the
      * crash into a skipped message.
      */
-    if (!n || !n->owner || !n->ptr) {
+    if (!n || !n->ptr) {
         logf_("binder: ★ узел в очереди мёртв (n=%p) — пропускаю", (void *)n);
         return 0;
     }
+    /*
+     * No owner means the process that published the object is gone, not that the node is dead.
+     * It still has to answer for the handles other processes hold — releasing them is exactly
+     * what they need — so only a missing object address disqualifies a node here.
+     */
+    if (!n->owner) { n->has_strong = n->has_weak = 0; n->internal_strong = 0; return 0; }
     /*
      * has_weak / has_strong say what the guest currently believes about this node.
      *
@@ -1198,8 +1243,28 @@ static void thread_error(struct thread *th, u32 err) {
 static void proc_release(struct proc *p) {
     struct proc **pp = &procs;
     while (*pp) { if (*pp == p) { *pp = p->next; break; } pp = &(*pp)->next; }
+    /*
+     * Drop the queued work that names this process's nodes before the nodes go away.
+     *
+     * node_work parks a W_NODE item carrying a bare struct node * on this very queue. The
+     * nodes are freed below, and the freed blocks are handed straight back out by the
+     * allocator — measured: the dead pointer and the txn allocated immediately after it
+     * were 0x767f0ba430 and 0x767f0ba240. emit_node then read owner/ptr out of reused
+     * memory, called the node dead, and the reference command the owner was owed never
+     * went out. SurfaceFlinger stayed at "not published, waiting..." because the object it
+     * had just registered never got its acquire.
+     */
+    for (struct work *w = p->todo.head, *nx; w; w = nx) {
+        nx = w->next;
+        free(w);
+    }
+    p->todo.head = p->todo.tail = 0;
     for (struct thread *th = p->threads, *nx; th; th = nx) {
         nx = th->next;
+        if (th->todo.head) {
+            for (struct work *w = th->todo.head, *wx; w; w = wx) { wx = w->next; free(w); }
+            th->todo.head = th->todo.tail = 0;
+        }
         if (th->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); }
         free(th);
     }
@@ -1207,15 +1272,24 @@ static void proc_release(struct proc *p) {
         struct node *n = p->nodes[i];
         while (n) {
             struct node *nx = n->hnext;
+            /*
+             * The node outlives its owner.
+             *
+             * Freeing it here left every other process's handle dangling: the refs of other
+             * processes were rewritten to r->node = 0, so a later transact on such a handle
+             * found nothing, and — worse — node_work could still hold the pointer in a queued
+             * W_NODE. The kernel keeps a node alive as long as anybody holds a reference to
+             * it and only reports the owner as gone; the same applies here. node_free_if_unused
+             * decides when it can actually go, and today it deliberately keeps them.
+             */
             n->owner = 0;
-            for (struct ref *r = n->refs; r; r = r->next_in_node) r->node = 0;
-            n->refs = 0;
-            n->nrefs = 0;
             n->has_strong = n->has_weak = n->queued = n->has_async = 0;
             n->internal_strong = n->local_strong = n->local_weak = 0;
-            free(n);
+            n->hnext = 0;
+            n->pend_strong = n->pend_weak = 0;
             n = nx;
         }
+        p->nodes[i] = 0;
     }
     for (struct dbuf *b = p->bufs, *nx; b; b = nx) {
         nx = b->next;
