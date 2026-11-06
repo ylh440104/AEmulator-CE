@@ -286,8 +286,34 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 2. свойства
         val s = settings
         val overrides = LinkedHashMap<String, String>()
-        // 2.3: ro.kernel.qemu=1 включает в фреймворке режим эмулятора — ставим его только mediaserver
-        overrides["ro.kernel.qemu"] = if (engine == Engine.GB) "0" else "1"
+/*
+         * ro.kernel.qemu tells the framework it runs under the emulator. It has to be 0
+         * for 1.x as well, not just for 2.3.
+         *
+         * libhardware.so of 1.0 exports qemu_add_mapping, and libpixelflinger calls it
+         * after generating a block of JIT code to report the mapping — but only when the
+         * property is set. The function opens "/dev/%s" (the emulator's pipe) and returns
+         * EINVAL when that device is not there:
+         *
+         *   5444: movs r1, #128
+         *   5446: lsls r3, r1, #5        4096
+         *   5448: cmp  r0, r3
+         *   544c: movs r5, #22           EINVAL
+         *   5450: ldr  r3, [pc, #96]     "/dev/%s"
+         *   5456: blx  open@plt
+         *   545e: blt  5488              failed: return the error
+         *
+         * ARMAssembler::generate then records "the mapping is valid" as false, the code
+         * cache is left inconsistent — CodeCache::lookup takes the comparator's return as
+         * an array index instead of a sign — and every draw jumps through a function
+         * pointer that was never filled. That is the fault on 0xffff1104 with the return
+         * address in ggl_init_scanline, seen on every boot of 1.0 until now.
+         *
+         * With the property at 0 the library never takes that path: the pages are plain
+         * anonymous memory that mprotect makes executable, which the translator already
+         * handles, and nothing else in the pipeline changes.
+         */
+        overrides["ro.kernel.qemu"] = if (engine == Engine.GB || img.api < 4) "0" else "1"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
         if (engine == Engine.N64) {             // SwiftShader (GLES 2/3 on the CPU) where the engine has it for this release

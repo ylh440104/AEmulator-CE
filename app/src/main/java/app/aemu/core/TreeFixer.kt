@@ -89,18 +89,6 @@ class TreeFixer(
 
     // ---------------------------------------------------------------- перед каждым запуском
 
-    private fun patchPixelflinger() {
-        val f = File(root, "system/lib/libpixelflinger.so")
-        if (!f.isFile) return
-        runCatching {
-            val orig = "engines/senses/libpixelflinger.so"
-            if (EngineAssets.size(ctx, orig) > 0) {
-                EngineAssets.open(ctx, orig).use { i -> f.outputStream().use { o -> i.copyTo(o) } }
-                f.setReadable(true, false)
-                log("pixelflinger: restored from assets (qemu_add_mapping pre-patched)")
-            }
-        }
-    }
 
     /**
      * Precompiled code of 5.0+ system apps and of the framework (the odex files in oat/arm and framework/arm) is the only copy: the jars
@@ -125,7 +113,6 @@ class TreeFixer(
     fun fixup(owners: Boolean = true) {
         if (owners) seedOwners()
         installEngineFiles()
-        patchPixelflinger()
         protectOat()
         fixThemeXml()
         parkWhetstone()
