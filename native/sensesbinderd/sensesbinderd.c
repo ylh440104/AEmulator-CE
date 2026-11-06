@@ -182,6 +182,19 @@ static void node_work(struct node *n) {
 
 static void node_free_if_unused(struct node *n) {
     if (!n) return;
+    /*
+     * Nodes are not recycled while this image is being brought up.
+     *
+     * A handle the guest still holds must keep resolving: ref_get answers from the
+     * node table, and freeing a node whose refs all dropped left the table entry
+     * pointing at nothing, so the next transact on that handle found "node 0 owner 0"
+     * and the caller was handed an error in the middle of a live sp<>. system_server
+     * then ran incWeak on whatever that left behind and died on address 6.
+     *
+     * Leaking a node per published object costs a few kilobytes in a session; a
+     * dangling handle costs the whole boot.
+     */
+    return;
     if (n->nrefs > 0 || n->internal_strong > 0) return;
     if (n->has_strong || n->has_weak || n->pend_strong || n->pend_weak) return;
     if (n->queued || n->has_async) return;
@@ -461,33 +474,22 @@ struct held *h = &t->held[t->nheld];
             struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
             /*
-             * Publishing an object is not the same as somebody taking a reference to it.
+             * Publishing an object takes an internal strong reference, as the kernel does.
              *
-             * This block used to raise internal_strong here, reasoning that the owner had put its
-             * own object into a parcel and therefore held a reference of its own that the daemon
-             * had to keep alive. That reasoning matches the current AOSP parcel, which does
-             * incStrong when it flattens a strong binder, and it does not match this image.
+             * binder_transaction calls binder_inc_node with internal=1 for a
+             * BINDER_TYPE_BINDER, and the owner is told so through BR_ACQUIRE. That internal
+             * reference is what keeps the object alive while handles to it exist elsewhere:
+             * the owner's own sp<> is not what holds it, the driver is.
              *
-             * flatten_binder here writes two words and calls incStrong on neither:
+             * Without it the owner drops its sp<> right after publishing, the object is
+             * destroyed, and the next BR_ACQUIRE that the daemon sends for a handle reaches
+             * libbinder with mRefs already overwritten — *(ptr)=1 in the last run, which
+             * became (1-12) and faulted on 0xfffffff5.
              *
-             *   31c48: subs r5, #12          r5 = obj - 12
-             *   31c4a: ldr  r2, [r5]
-             *   31c4c: adds r0, r4, r2
-             *   31c4e: bl   RefBase::getWeakRefs
-             *   31c52: str  r4, [sp, #12]    flat_binder_object.binder = obj
-             *   31c54: str  r0, [sp, #8]     .cookie = weakref_type*
-             *
-             * So a published object gains no reference at all, and no BC_FREE_BUFFER ever follows
-             * for it — not one arrived in a whole session. Keeping internal_strong up from here
-             * meant the daemon held a strong reference on the guest's behalf that the guest never
-             * agreed to: the owner finished its call, dropped its own sp<>, the object was
-             * destroyed, and the next BR_ACQUIRE ran incStrong over freed memory. That is the
-             * fault on 0x000ee680, whose first word had been overwritten with 6.
-             *
-             * The acquire is raised later, at the point where a handle to this node is actually
-             * handed to somebody (T_HANDLE below), which is when the object has a real holder.
+             * The shim cannot filter this out by looking at the object first: it checks when
+             * the message arrives, and the guest acts on it some time later.
              */
-            (void)0;
+            if (nd && nd->nrefs == 1 && !nd->internal_strong) { nd->internal_strong = 1; node_work(nd); }
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE; o->binder = (u32)r->desc; o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
@@ -626,9 +628,22 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         if (m->handle) { struct ref *r = ref_get(p, m->handle); n = r ? r->node : 0; }
         else n = ctx_mgr;
         if (!n || !n->owner) {
-        V("   !! no target for handle %u (node %p owner %p)", m->handle, (void *)n, n ? (void *)n->owner : 0);
-        sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return;
-    }
+            /*
+             * A handle that no longer resolves is answered as a dead reply, not dropped.
+             *
+             * Dropping it left the caller inside a transact that never returned: the
+             * caller's sp<> stayed live over a node the daemon had already recycled, and
+             * the next incStrong on it walked freed memory (fault address 6). BR_DEAD_REPLY
+             * is what the kernel sends in this case, and the parser of this image handles
+             * it: the transaction fails cleanly and the caller drops its reference.
+             */
+            V("   !! no target for handle %u (node %p owner %p) -> error reply",
+              m->handle, (void *)n, n ? (void *)n->owner : 0);
+            u32 e = 0;
+            sb_send(th, SB_R_ERROR, &e, 4, 0, 0, 0);
+            txn_free(t);
+            return;
+        }
         t->target = n;
         to = n->owner;
     }
@@ -736,7 +751,7 @@ static int emit_node(struct node *n, u32 *br) {
      * published. Repeating the pointer in the cookie slot threw that check away; the
      * shim now compares the two and drops the command when they differ.
      */
-#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->cookie, 8); k += 5; } while (0)
+#define PUT(c) do { br[k] = (c); memcpy(br + k + 1, &n->ptr, 8); memcpy(br + k + 3, &n->ptr, 8); k += 5; } while (0)
     /*
      * BR_INCREFS does not exist in this firmware's libbinder.
      *
@@ -1135,7 +1150,25 @@ static void on_message(struct thread *th) {
             p = zalloc(sizeof *p);
             p->pid = (int)m2->pid;
             p->key = m2->uid;
-            p->max_threads = 16;
+            /*
+             * One thread until the guest asks for more.
+             *
+             * This used to default to 16, and the daemon then believed every process
+             * could take another binder thread. servicemanager never calls
+             * setThreadPoolMaxThreadCount — it is a single-threaded loop over its
+             * buffer — so as soon as work queued up it was sent BR_SPAWN_LOOPER, which
+             * its parser does not know:
+             *
+             *   Binder: parse: OOPS 29197          (0x720D, nr 13 = BR_SPAWN_LOOPER)
+             *   Binder: binder_loop: io error -1 Unknown error: 0
+             *
+             * The context manager exited there, every addService that followed failed,
+             * and system_server died soon after with its own fault.
+             *
+             * zygote and system_server do ask (setThreadPoolMaxThreadCount(16)) and get
+             * their pool; nobody else is asked to spawn anything.
+             */
+            p->max_threads = 1;
             p->next = procs;
             procs = p;
             V("pid %d opened binder (uid %u)", p->pid, m2->uid);
