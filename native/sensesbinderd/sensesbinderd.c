@@ -992,9 +992,27 @@ static void deliver(struct thread *th) {
          * reached from it alone. Transactions stay available to every thread, which is
          * what the pool is for.
          */
-        struct wq *q = th->todo.head ? &th->todo : (th->is_main ? &p->todo : 0);
+        /*
+         * Transactions belong to every thread of the process, reference commands to the main
+         * one. The queue selection used to enforce that by giving the process queue to the main
+         * thread alone, which also hid every transaction from the pool: surfaceflinger keeps its
+         * main thread inside SurfaceFlingerSynchro::wait() and never comes back to binder, so a
+         * transaction parked on the process queue was never collected. It sat there while
+         * system_server asked for the control block, and the whole boot stopped at
+         * "Waiting for service SurfaceFlinger".
+         *
+         * So the pool may drain the process queue too, and only a W_NODE item is put back for the
+         * main thread to handle.
+         */
+        struct wq *q = th->todo.head ? &th->todo : &p->todo;
         struct work *w = q ? wq_pop(q) : 0;
         if (!w) break;
+        if (w->type == W_NODE && !th->is_main) {
+            w->next = p->todo.head;
+            p->todo.head = w;
+            if (!p->todo.tail) p->todo.tail = w;
+            break;
+        }
         switch (w->type) {
         case W_COMPLETE:
         case W_ACK: ack++; break;
