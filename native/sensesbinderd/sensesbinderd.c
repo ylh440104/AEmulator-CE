@@ -252,6 +252,24 @@ static struct node *node_get(struct proc *p, u64 ptr, u64 cookie, int create) {
     return n;
 }
 
+/*
+ * A published object handed back to its own process keeps no handle entry.
+ *
+ * The guest resolves a BINDER_TYPE_BINDER by pointer, so there is no handle number to hand
+ * out and nothing to give back: a local JavaBBinder never produces BC_RELEASE. Recording a
+ * ref anyway made nrefs climb for the whole session, which kept internal_strong up and
+ * suppressed the release the owner was owed.
+ *
+ * The object still has to stay alive, and that is what internal_strong is for, so it is
+ * raised here directly instead of through a ref.
+ */
+static void ref_inc_home(struct txn *t, struct node *n, int strong) {
+    if (strong && n->owner) {
+        n->internal_strong = 1;
+        t->held[t->nheld].node = n;
+        t->held[t->nheld++].strong = 1;
+    }
+}
 static void ref_add_node(struct ref *r, struct node *n) {
     r->node = n;
     r->next_in_node = n->refs;
@@ -512,8 +530,32 @@ struct held *h = &t->held[t->nheld];
              * treated as the object changes.
              */
             struct node *nd = node_get(p, o->cookie, o->binder, 1);
-            struct ref *r = ref_for_node(to, nd);
             int strong = o->type == T_BINDER;
+            /*
+             * A binder object on its way home does not take a new reference.
+             *
+             * ref_for_node() used to be called before this decision, so every home delivery of a
+             * published object still created a handle entry for its own process. The guest can
+             * never give that entry back — a local JavaBBinder produces no BC_RELEASE — so nrefs
+             * only ever climbed: 788 BR_ACQUIRE against 0 BR_RELEASE in one session. The count
+             * that never drops also keeps internal_strong up, which in turn suppresses the
+             * release the owner is owed, and the surplus wp<> is what the pool thread later walks
+             * into at libandroid_runtime +0x3688a.
+             *
+             * The kernel does not do this either: binder_transaction hands the original pointer
+             * back for BINDER_TYPE_BINDER without creating a ref for the receiving process.
+             */
+            if (nd->owner && nd->owner->pid == to->pid) {
+                V("   home: obj=0x%x wr=0x%x owner=%d to=%d code=%u",
+                  (unsigned)nd->ptr, (unsigned)nd->cookie,
+                  nd->owner ? nd->owner->pid : 0, to->pid, (unsigned)t->code);
+                o->type = strong ? T_BINDER : T_WEAK_BINDER;
+                o->binder = (u32)nd->cookie;
+                o->cookie = (u32)nd->ptr;
+                ref_inc_home(t, nd, strong);
+                break;
+            }
+            struct ref *r = ref_for_node(to, nd);
             /*
              * Publishing an object takes an internal strong reference, as the kernel does.
              *
@@ -540,21 +582,19 @@ struct held *h = &t->held[t->nheld];
                 V("   T_BINDER obj=0x%x wr=0x%x cur_th=%p cur_proc=%p p=%p has_strong=%d",
                   (unsigned)o->cookie, (unsigned)o->binder,
                   (void *)g_cur_th, g_cur_th ? (void *)g_cur_th->proc : 0, (void *)p, nd->has_strong);
-                if (g_cur_th && g_cur_th->proc == p && !nd->has_strong) {
-                    V("   -> immediate acquire");
-                    u32 br2[8];
-                    int k2 = emit_node(nd, br2);
-                    if (k2 >= 5) {
-                        struct sb_ptr_cookie pc1;
-                        pc1.op = (br2[0] == BR_ACQUIRE) ? SB_REF_ACQUIRE : SB_REF_RELEASE;
-                        pc1.pad = 0;
-                        memcpy(&pc1.ptr, br2 + 1, 8);
-                        memcpy(&pc1.cookie, br2 + 3, 8);
-                        sb_send(g_cur_th, SB_R_REF, &pc1, sizeof pc1, 0, 0, 0);
-                    }
-                } else {
-                    node_work(nd);
-                }
+                /*
+                 * The acquire is queued, never piggybacked on this very answer.
+                 *
+                 * Handing it back inside the ioctl that delivered the transaction ran the guest's
+                 * incStrong while its RefBase was still being built: the object already had its
+                 * vtable written but mRefs was not assigned yet, so incStrong read this+4 as zero
+                 * and faulted at libutils +0x20306. Measured words at the object were
+                 * "fcb735ad 0000" — vtable present, mRefs empty.
+                 *
+                 * The kernel queues it for the same reason: the owner gets the acquire on a later
+                 * read, by which time the object is fully constructed.
+                 */
+                node_work(nd);
             }
             /*
              * A binder object that goes home must go home as a binder object.
@@ -570,18 +610,9 @@ struct held *h = &t->held[t->nheld];
              * android.app.ApplicationThreadProxy@... (pid=6082) when registering receiver".
              * The kernel hands the original pointer back for exactly this reason.
              */
-            if (nd->owner && nd->owner->pid == to->pid) {
-                V("   home: obj=0x%x wr=0x%x owner=%d to=%d code=%u",
-                  (unsigned)nd->ptr, (unsigned)nd->cookie,
-                  nd->owner ? nd->owner->pid : 0, to->pid, (unsigned)t->code);
-                o->type = strong ? T_BINDER : T_WEAK_BINDER;
-                o->binder = (u32)nd->cookie;
-                o->cookie = (u32)nd->ptr;
-            } else {
-                o->type = strong ? T_HANDLE : T_WEAK_HANDLE;
-                o->binder = (u32)r->desc;
-                o->cookie = 0;
-            }
+            o->type = strong ? T_HANDLE : T_WEAK_HANDLE;
+            o->binder = (u32)r->desc;
+            o->cookie = 0;
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
         }
