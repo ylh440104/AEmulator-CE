@@ -452,7 +452,24 @@ static void wake_proc(struct proc *p) {
 
 static void kick_proc(struct proc *p) {
     struct thread *th;
-    while (p->todo.head && (th = ready_thread(p))) deliver(th);
+    /*
+     * Bound the loop.
+     *
+     * deliver() calls back into kick_proc() at its tail, and this loop calls deliver() again, so a
+     * thread that passes ready_thread() but fails deliverable() would spin here forever inside one
+     * message handler — which is exactly the shape of the stall: the daemon goes silent on
+     * "msg type=11" (SB_WAIT) and never services another connection, while the guests queue half a
+     * million connect() calls behind it. A hard bound turns that into a logged skip instead of a
+     * frozen daemon.
+     */
+    int guard = 0;
+    while (p->todo.head && (th = ready_thread(p))) {
+        if (++guard > 4096) {
+            logf_("sensesbinderd: ★ kick_proc guard hit (pid %d, todo non-empty, no progress)", p->pid);
+            break;
+        }
+        deliver(th);
+    }
     // Nothing parked in SB_WAIT and the queue is still not empty: ring the alarm. A process whose
     // main thread only runs a frame loop (surfaceflinger) never blocks in ioctl, so writing to a
     // thread is not an option — the alarm thread turns this into POLLIN on the guest's binder
@@ -741,7 +758,19 @@ struct held *h = &t->held[t->nheld];
             o->binder = (u32)fdi;
             fdi++;
             break;
-        default: return -1;
+        default:
+            /*
+             * Name the object type that was rejected.
+             *
+             * translate() returning -1 makes the daemon answer BR_FAILED_REPLY, and the guest then
+             * sees "!!! FAILED BINDER TRANSACTION !!!". Display.init() turns exactly that into an
+             * IllegalArgumentException, which killed system_server at
+             * WindowManagerImpl.getDefaultDisplay — after Connectivity Service had already started.
+             * Without this line the type is invisible.
+             */
+            logf_("binder: ★ unknown fbo type %#x (code %u to pid %d) — rejecting the transaction",
+                  o->type, (unsigned)t->code, to ? to->pid : -1);
+            return -1;
         }
     }
     return 0;
@@ -1721,7 +1750,12 @@ static void on_message(struct thread *th) {
         th->waiting = 1;
         th->nonblock = 0;
         th->read_size = 256 * 4;
-        deliver(th);
+        {
+            static unsigned seen_in, seen_out;
+            if (seen_in < 40) { seen_in++; logf_("binder: SB_WAIT enter tid=%d pid=%d", th->tid, th->proc ? th->proc->pid : -1); }
+            deliver(th);
+            if (seen_out < 40) { seen_out++; logf_("binder: SB_WAIT exit  tid=%d", th->tid); }
+        }
         if (th->waiting && th->proc) kick_proc(th->proc);
         break;
     case SB_UNWAIT:
