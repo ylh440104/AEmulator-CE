@@ -195,7 +195,7 @@ class TreeFixer(
          * The patch makes the no-flip branch hand back the mmap'ed framebuffer as the back buffer, so
          * there is nothing to copy and PAGE_FLIP no longer matters.
          */
-        FbDirectPatch.apply(root, img.api, ::log)
+        FbDirectPatch.apply(root, img.api, log)
     }
     /**
      * Скрипты am/pm/input/monkey… в старых прошивках начинаются с «# Script…» без #!. Ядро на такой
