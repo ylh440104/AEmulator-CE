@@ -1053,6 +1053,21 @@ static int emit_node(struct node *n, u32 *br) {
         n->internal_strong = 0;
         strong = 0;
     }
+    if (n->ptr == 0) {
+        /*
+         * Nothing to acquire: the node has no object address yet.
+         *
+         * PUT writes n->ptr into the payload, and executeCommand on this firmware dereferences it
+         * (incStrong, libutils+0x20306). A node that was created from a handle — which is how
+         * mediaserver's first lookups arrive — has cookie set but ptr still zero until the owner
+         * publishes the object. Sending an acquire for it means incStrong on address 0, and
+         * mediaserver died exactly there: PC=0xa9d20306, LR=0xa9d2d55b (the BR_ACQUIRE branch of
+         * executeCommand). Skipping it costs nothing; when the object really is published the
+         * node's own emit carries the acquire.
+         */
+        n->internal_strong = 0;
+        strong = 0;
+    }
     if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
     if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
 #undef PUT
@@ -1734,7 +1749,22 @@ int main(int argc, char **argv) {
     for (;;) {
         struct epoll_event evs[64];
         int n = epoll_wait(ep, evs, 64, -1);
-        if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n < 0) {
+            /*
+             * Never leave the loop because one epoll_wait failed.
+             *
+             * Breaking here stops the daemon from ever accepting another connection: the three
+             * processes that were already connected keep working, so the boot looks fine for a
+             * while, and every later one fails to connect forever. That is exactly what
+             * system_server hit — 8 attempts logged, then it sat retrying BC_ENTER_LOOPER once a
+             * second for the rest of the run while SurfaceFlinger and mediaserver were connected
+             * and answering. A failed wait is not a reason to stop serving.
+             */
+            if (errno == EINTR) continue;
+            logf_("binder: epoll_wait failed: %s", strerror(errno));
+            usleep(1000);
+            continue;
+        }
         for (int i = 0; i < n; i++) {
             if (!evs[i].data.ptr) {
                 int fd = accept4(ls, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK);
