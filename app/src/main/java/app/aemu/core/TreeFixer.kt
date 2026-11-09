@@ -397,7 +397,20 @@ class TreeFixer(
         // the GPU bridge for 32-bit programs (native/glroute): libEGL takes it before the software renderer, and it
         // sends the toolkit's drawing on to that renderer; without the GPU option it is not there at all
         kernel.gpuBridge32?.let { name ->
-            val on = img.settings.gpu && File(root, "system/bin/app_process32").isFile
+            /*
+             * The gateway also has to accept 1.x, which has app_process and no app_process32.
+             *
+             * The condition used to be app_process32 alone, so every 1.x image skipped the whole
+             * block and left system/lib/egl empty. SurfaceFlinger then found no EGL driver and exited
+             * with code 255 before writing a single line to its log — measured on this ADP1 image:
+             * "surfaceflinger started / surfaceflinger exited, code 255", host-surfaceflinger.log
+             * containing nothing but the separator line. mediaserver died the same way, and
+             * system_server stopped at Starting Power Manager because the services it wanted were
+             * never published.
+             */
+            val hasGuestProcess = File(root, "system/bin/app_process32").isFile ||
+                File(root, "system/bin/app_process").isFile
+            val on = img.settings.gpu && hasGuestProcess
             for ((asset, to) in listOf((if (kernel.gpuBridge32Open) "libGLES_aemu.so" else "libGLES_route.so") to name, "libGLES_split.so" to "libGLES_split.so", "libGLES.so" to "libGLES_bridge.so")) {
                 val f = File(root, "system/lib/egl/$to")
                 if (on) runCatching {
