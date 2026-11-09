@@ -735,6 +735,8 @@ struct held *h = &t->held[t->nheld];
             // SCM_RIGHTS array that travels with the message: guest_binder.c reads it back as
             // fds[fo->handle]. Leaving the raw number in place made every lookup miss and every
             // heap come back as -1, which is what killed system_server on its first IMemoryHeap.
+            V("binder: T_FD guest fd %u -> index %d of %d (code %u to pid %d)",
+              (unsigned)o->binder, fdi, t->nfds, (unsigned)t->code, to->pid);
             if (fdi >= t->nfds) return -1;
             o->binder = (u32)fdi;
             fdi++;
