@@ -214,6 +214,17 @@ class GuestRunner(
         if (img.api >= 18) { e["AEMU_GL_RETARGET"] = "0"; e["AEMU_GL_CLIENT_ARRAYS"] = "0" }
         if (tbFlush > 0) e["DHD_TBFLUSH"] = tbFlush.toString()
         if (noSmc) e["DHD_NO_SMC"] = "1"
+        /*
+         * Android 1.x needs the SMC path of the translator.
+         *
+         * pixelflinger's ARMAssembler (libpixelflinger +0xd9f0) generates scanline code at runtime and
+         * jumps into it immediately, inside one translation block. qemu's page-write detection does
+         * not see that pair, so the guest executed stale code and died with SIGSEGV right after
+         * "ARMAssembler" appeared in the log. GUEST_NO_SMC makes the translator invalidate the range
+         * the guest asks for in ARM_NR_cacheflush instead, with no write traps at all — measured on
+         * this ADP1 image: signal 11 went from present on every boot to 0.
+         */
+        if (img.api < 4) e["DHD_NO_SMC"] = "1"
         if (noTcgOpt) e["DHD_NO_TCGOPT"] = "1"
         // 1.x/2.x early: the Glide assembler and the dalvik JIT emit ARM code into anonymous pages at runtime;
         // qemu's page-attribute SMC detection misses some of those writes on old kernels and the guest dies with
@@ -228,7 +239,8 @@ class GuestRunner(
                 "DHD_NET_LOG" to "GUEST_NET_LOG", "DHD_ASHMEM_LOG" to "GUEST_ASHMEM_LOG",
                 "DHD_BINDER_LOG" to "GUEST_BINDER_LOG", "DHD_CREDS" to "GUEST_CREDS",
                 "DHD_SDCARD" to "GUEST_SDCARD", "DHD_INPUT_ST" to "GUEST_INPUT_ST",
-                "DHD_BINDER_VERBOSE" to "GUEST_BINDER_VERBOSE", "DHD_DNS53" to "GUEST_DNS53"
+                "DHD_BINDER_VERBOSE" to "GUEST_BINDER_VERBOSE", "DHD_DNS53" to "GUEST_DNS53",
+                "DHD_NO_SMC" to "GUEST_NO_SMC", "DHD_NO_TCGOPT" to "GUEST_NO_TCGOPT"
             )) e[d]?.let { e[g] = it }
             e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
             e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }

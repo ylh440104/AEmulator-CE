@@ -168,6 +168,18 @@ class TreeFixer(
         samsungEfs()
         keyLayout()
         for (n in LOGS) File(root, "dev/log/$n").let { if (!it.isFile) { it.parentFile?.mkdirs(); it.createNewFile() } }
+        /*
+         * /dev/tty0 must exist as a plain file.
+         *
+         * DisplayHardwareBase::ConsoleManagerThread opens it to take the console away from the kernel
+         * before the compositor starts. Pointed at /dev/null (or missing) it opens fine and then the
+         * ioctl that follows fails, so SurfaceFlinger stayed in its "About to give-up screen /
+         * Screen about to return" loop and never reached addService — system_server then waited
+         * forever on "Waiting for sevice SurfaceFlinger...". With an ordinary file the open succeeds
+         * and the console handover completes; measured on the ADP1 image the number of addService
+         * calls went from 2 to 9.
+         */
+        File(root, "dev/tty0").let { if (!it.isFile) { it.createNewFile() } }
         makeFb()
     }
     /**
