@@ -1523,10 +1523,31 @@ static void on_message(struct thread *th) {
         return;
     }
     if ((h.flags & SB_F_MAGIC_MASK) != SB_F_MAGIC) {
-        logf_("sensesbinderd: ★ out of sync: len=%u type=%u tid=%u flags=%#x", h.len, h.type, h.tid, h.flags);
+        /*
+         * Dump the raw header, not just the decoded fields.
+         *
+         * The decoded values say len=1, which is exactly sb_hello.pid for init — so the read looks
+         * shifted by the 16 bytes of a header. Raw words settle whether the guest wrote a body first
+         * or the daemon started reading mid-message.
+         */
+        logf_("sensesbinderd: ★ out of sync: len=%u type=%u tid=%u flags=%#x raw=%08x %08x %08x %08x",
+              h.len, h.type, h.tid, h.flags,
+              ((const unsigned *)&h)[0], ((const unsigned *)&h)[1],
+              ((const unsigned *)&h)[2], ((const unsigned *)&h)[3]);
         return;
     }
     int fds[SB_MAXFDS], nfds = 0;
+    /*
+     * Name every message before dispatching it.
+     *
+     * The daemon goes silent right after "accepted fd 18" and the heartbeat stops with it, so it is
+     * stuck inside one handler. Logging the type on the way in — the last line printed names the
+     * handler that never returned. Rate limited to the first 200 so a hot loop cannot flood.
+     */
+    {
+        static unsigned seen;
+        if (seen < 200) { seen++; logf_("binder: msg type=%u len=%u tid=%u fd=%d", h.type, h.len, h.tid, th->fd); }
+    }
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
             nfds = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
