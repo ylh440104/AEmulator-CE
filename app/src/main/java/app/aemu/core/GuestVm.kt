@@ -332,6 +332,21 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          */
         overrides["system_init.startsurfaceflinger"] = "0"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
+        /*
+         * ro.sf.hw makes SurfaceFlinger take the hardware GL path.
+         *
+         * SurfaceFlinger reads it to choose between the hardware EGL and the software one. On a build
+         * whose ro.sf.hw is 1 but where no GPU is available, eglGetDisplay yields nothing usable and
+         * the compositor reports
+         *
+         *   validate_display_surface:775 error 3008 (EGL_BAD_DISPLAY)
+         *
+         * then getDisplayInfo answers with a bare error code. system_server turns that into
+         * java.lang.IllegalArgumentException at android.view.Display.init and dies, which is what
+         * stopped Android 1.0 at Starting Connectivity Service while every binder call was working.
+         * Without a GPU the software path has to be selected explicitly.
+         */
+        if (!s.gpu) overrides["ro.sf.hw"] = "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
         if (engine == Engine.N64) {             // SwiftShader (GLES 2/3 on the CPU) where the engine has it for this release
             // (8.0+ libEGL picks the driver by name: 1 is the emulator's host GPU pipe, 2 is SwiftShader)
