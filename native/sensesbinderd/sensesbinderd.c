@@ -746,6 +746,35 @@ struct held *h = &t->held[t->nheld];
 }
 
 static void proc_release(struct proc *p);
+/*
+ * Detach a process that lost its link, without touching what it published.
+ *
+ * proc_release() is the right thing when a process is really gone: it clears has_strong/has_weak on
+ * every node and drops ctx_mgr if the caller owned it. Applied to a mere disconnect that is far too
+ * destructive — servicemanager staying registered is the whole point of the service registry, and
+ * the boot died at Starting Activity Manager every time this ran on it.
+ *
+ * The struct itself is deliberately leaked: nodes keep n->owner pointing at it, and freeing it here
+ * would leave every one of them dangling. Losing a few hundred bytes per disconnect is cheaper than
+ * the alternatives.
+ */
+static void proc_release_keep_nodes(struct proc *p) {
+    struct proc **pp = &procs;
+    while (*pp) { if (*pp == p) { *pp = p->next; break; } pp = &(*pp)->next; }
+    for (struct work *w = p->todo.head, *nx; w; w = nx) { nx = w->next; free(w); }
+    p->todo.head = p->todo.tail = 0;
+    for (struct thread *th = p->threads, *nx; th; th = nx) {
+        nx = th->next;
+        if (th->todo.head) {
+            for (struct work *w = th->todo.head, *wx; w; w = wx) { wx = w->next; free(w); }
+            th->todo.head = th->todo.tail = 0;
+        }
+        if (th->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); th->fd = -1; }
+        free(th);
+    }
+    p->threads = 0;
+    p->pump = 0;
+}
 
 /**
  * Dump the head of a parcel as hex. Guessing at the layout cost several rounds: two attempts at
@@ -1429,6 +1458,20 @@ static void on_message(struct thread *th) {
     do { n = recvmsg(th->fd, &m, MSG_CMSG_CLOEXEC); } while (n < 0 && errno == EINTR);
     if (n <= 0) {
         if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            /*
+             * Never release a process because one of its links closed.
+             *
+             * Every disconnect used to run proc_release, and for a main thread that wipes the whole
+             * process: its threads, its queue, and — when it was the context manager — ctx_mgr
+             * itself. One closed connection therefore took out the entire service registry, which
+             * is exactly the failure that stalled the boot at Starting Activity Manager while
+             * servicemanager reported "ioctl failed (Transport endpoint is not connected)".
+             * A link closing only means this thread stopped talking; the nodes it published stay
+             * alive because other processes may hold references to them.
+             */
+            logf_("binder: link closed tid %d pid %d (n=%d errno=%d)%s", th->tid,
+                  th->proc ? th->proc->pid : -1, (int)n, errno,
+                  th->is_main ? " main" : th->is_pump ? " alarm" : "");
             if (th->proc && th->is_main) proc_release(th->proc);
             else if (th->proc) {
                 struct proc *p = th->proc;
