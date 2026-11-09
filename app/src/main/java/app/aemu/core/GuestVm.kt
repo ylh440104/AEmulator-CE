@@ -314,6 +314,23 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          * handles, and nothing else in the pipeline changes.
          */
         overrides["ro.kernel.qemu"] = if (engine == Engine.GB || img.api < 4) "0" else "1"
+        /*
+         * Keep system_server from starting a second SurfaceFlinger inside itself.
+         *
+         * system_init() of this era reads this property and, when it is "1", calls
+         * SurfaceFlinger::instantiate() — libsystem_server.so strcmp at +0x1292. With the
+         * property missing, property_get hands back the default "1", so the framework built a
+         * SurfaceFlinger inside system_server while the real surfaceflinger process was already
+         * running and registered. Two compositors then fought over the "SurfaceFlinger" entry in
+         * servicemanager, and which one won changed from boot to boot: ActivityManager would sit
+         * in "Waiting for sevice SurfaceFlinger..." or "SurfaceFlinger not published, waiting..."
+         * for the whole run, and the boot stalled at Starting Activity Manager.
+         *
+         * init.rc on a real device starts surfaceflinger as its own service, so this property is
+         * 0 there. Setting it here makes the emulator match, and system_server then reaches
+         * Starting Connectivity Service.
+         */
+        overrides["system_init.startsurfaceflinger"] = "0"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
         if (engine == Engine.N64) {             // SwiftShader (GLES 2/3 on the CPU) where the engine has it for this release
