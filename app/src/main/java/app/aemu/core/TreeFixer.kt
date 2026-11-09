@@ -422,6 +422,19 @@ class TreeFixer(
                     }
                 } else if (to != name || !isLink(f)) f.delete()
             }
+            /*
+             * Say whether the bridge actually landed.
+             *
+             * The block above is wrapped in runCatching, so a failed copy is silent — and that is
+             * indistinguishable in the log from the condition never being true. Measured need: the
+             * 1.x image had an empty system/lib/egl, SurfaceFlinger exited with code 255 before
+             * printing anything, and there was no way to tell from the outside which of the two it
+             * was. This line names the decision and the result.
+             */
+            val eglDir = File(root, "system/lib/egl")
+            val placed = eglDir.listFiles()?.joinToString { it.name } ?: ""
+            log("gpu bridge: gpu=${img.settings.gpu} app_process=$hasGuestProcess on=$on " +
+                "copied=$copied egl=[$placed]")
         }
         // 10+ over the 8.1 vendor side: the codec service there is 8.1's, and its minijail takes one @include in a
         // policy; the system image's policy has a second one (code coverage, empty in a release build), and the
