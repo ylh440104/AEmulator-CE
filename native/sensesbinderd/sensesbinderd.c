@@ -196,6 +196,17 @@ static void node_work(struct node *n) {
     w->node = n;
     n->queued = 1;
     wq_push(&n->owner->todo, w);
+    /*
+     * Do not kick the process whose own ioctl is being answered right now.
+     *
+     * When a process publishes an object and that same call is the one being translated, owner
+     * and sender are the same process. Kicking it re-entered the delivery loop on the thread
+     * that was still inside translate(): the log ended at "T_BINDER obj=..." with no reply, no
+     * acknowledgement and no release path, and system_server's very first addService never
+     * reached servicemanager. The work is on the queue already, and that thread leaves the ioctl
+     * as soon as translate() returns, so the guest comes back for it by itself.
+     */
+    if (g_cur_th && g_cur_th->proc == n->owner) return;
     kick_proc(n->owner);
 }
 
@@ -464,13 +475,29 @@ static struct thread *main_thread_of(struct proc *p) {
     return 0;
 }
 
+static void queue_txn(struct txn *t, struct thread *target);
+static int deliverable(struct thread *th);
 static void queue_txn(struct txn *t, struct thread *target) {
     struct work *w = mkwork(W_TXN);
     w->t = t;
-    if (target) { wq_push(&target->todo, w); deliver(target); return; }
+    /*
+     * Only hand it to a specific thread when that thread can actually take it right now.
+     *
+     * The old code pushed the work onto the target and returned unconditionally. deliver()
+     * refuses when the thread is busy — deliverable() wants an empty stack for work that comes
+     * off a shared queue — so the transaction sat on a queue that nobody would ever look at
+     * again. Measured: system_server's addService was acknowledged to the sender and then never
+     * reached servicemanager, and the boot stopped at "Waiting for service SurfaceFlinger"
+     * while the daemon logged "ask pid ... for another binder thread" over and over.
+     */
+    if (target && deliverable(target)) {
+        wq_push(&target->todo, w);
+        deliver(target);
+        if (!target->todo.head) return;
+    }
     if (t->target && t->target == ctx_mgr) {
         struct thread *main_th = main_thread_of(t->to_proc);
-        if (main_th) { wq_push(&main_th->todo, w); deliver(main_th); return; }
+        if (main_th && deliverable(main_th)) { wq_push(&main_th->todo, w); deliver(main_th); return; }
     }
     wq_push(&t->to_proc->todo, w);
     kick_proc(t->to_proc);
@@ -568,6 +595,9 @@ struct held *h = &t->held[t->nheld];
                 break;
             }
             struct ref *r = ref_for_node(to, nd);
+            logf_("binder: TB step pid %d nd=%p nrefs=%u internal=%d owner=%d to=%d code=%u",
+                  p->pid, (void *)nd, (unsigned)nd->nrefs, nd->internal_strong,
+                  nd->owner ? nd->owner->pid : 0, to->pid, (unsigned)t->code);
             /*
              * Publishing an object takes an internal strong reference, as the kernel does.
              *
@@ -1013,7 +1043,22 @@ static int deliverable(struct thread *th) {
     const char *p = buf;
     while (len) {
         ssize_t n = write(fd, p, len);
-        if (n < 0) { if (errno == EINTR) continue; return -1; }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            /*
+             * A full buffer must not stall the daemon.
+             *
+             * The alarm connection belongs to the guest, and this write happens on the thread
+             * that is delivering somebody else's transaction. When it was blocking and the
+             * guest had not drained it yet, the whole daemon stopped inside translate():
+             * "wake pid 16805 (alarm tid 16810 fd 14)" was the last line before the boot froze,
+             * and system_server's first addService was never acknowledged. The nudge is only a
+             * hint that work is waiting — the guest also comes back on its own — so dropping it
+             * when the buffer is full is safe.
+             */
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+            return -1;
+        }
         if (n == 0) { errno = EPIPE; return -1; }
         p += n; len -= (size_t)n;
     }
@@ -1044,7 +1089,11 @@ static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, cons
         memcpy(CMSG_DATA(cm), fds, sizeof(int) * (size_t)nfds);
         ssize_t n;
         do { n = sendmsg(th->fd, &m, MSG_NOSIGNAL); } while (n < 0 && errno == EINTR);
-        if (n != (ssize_t)sizeof h) return -1;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+        if (n != (ssize_t)sizeof h) {
+            logf_("binder: SEND-FAIL type %u tid %d fd %d: %s", type, th->tid, th->fd, strerror(errno));
+            return -1;
+        }
         if (!blen) return 0;
     } else {
         if (wr_all(th->fd, &h, sizeof h) < 0) return -1;
@@ -1609,7 +1658,7 @@ int main(int argc, char **argv) {
     sa.sun_family = AF_UNIX;
     strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
     unlink(path);
-    if (bind(ls, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(ls, 128) < 0) {
+    if (bind(ls, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(ls, 1024) < 0) {
         perror("sensesbinderd: bind");
         return 1;
     }
@@ -1626,17 +1675,18 @@ int main(int argc, char **argv) {
         if (n < 0) { if (errno == EINTR) continue; break; }
         for (int i = 0; i < n; i++) {
             if (!evs[i].data.ptr) {
-                int fd = accept4(ls, 0, 0, SOCK_CLOEXEC);
-                if (fd < 0) continue;
-                struct thread *th = zalloc(sizeof *th);
-                th->fd = fd;
-                memset(&ev, 0, sizeof ev);
-                ev.events = EPOLLIN;
-                ev.data.ptr = th;
-                epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+                int fd = accept4(ls, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK);
+                if (fd >= 0) {
+                    logf_("binder: accepted fd %d", fd);
+                    struct thread *th = zalloc(sizeof *th);
+                    th->fd = fd;
+                    memset(&ev, 0, sizeof ev);
+                    ev.events = EPOLLIN;
+                    ev.data.ptr = th;
+                    epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
+                }
             } else {
                 on_message((struct thread *)evs[i].data.ptr);
-                break;
             }
         }
     }
