@@ -1116,7 +1116,23 @@ class TreeFixer(
         File(root, "dev/hwbinder").takeIf { it.isDirectory }?.let { wipe(it) }
         File(root, "dev/vndbinder").takeIf { it.isDirectory }?.let { wipe(it) }
         for (n in listOf("binder", "hwbinder", "vndbinder", "ashmem")) {
-            File(root, "dev/$n").let { if (!it.exists()) { it.parentFile?.mkdirs(); it.createNewFile() } }
+            File(root, "dev/$n").let {
+                if (!it.exists()) { it.parentFile?.mkdirs(); it.createNewFile() }
+                /*
+                 * ashmem needs a length, not just an inode.
+                 *
+                 * MemoryHeapBase opens /dev/ashmem and mmaps it, and mmapping a zero length file
+                 * fails no matter what the guest asks for. With an empty file SurfaceFlinger stopped
+                 * right after "SurfaceFlinger's main thread ready to run. Initializing graphics
+                 * H/W" and never printed the EGL config list, never reached addService, and left
+                 * system_server on "Waiting for sevice SurfaceFlinger..." for the whole run. Given
+                 * a real length the same image reports "EGL informations" and the compositor comes
+                 * up. The file is sparse, so the length costs no storage.
+                 */
+                if (n == "ashmem" && it.length() < (1 shl 20)) {
+                    java.io.RandomAccessFile(it, "rw").use { f -> f.setLength(1L shl 20) }
+                }
+            }
         }
         File(root, "dev/cpuctl").takeIf { it.exists() }?.let { wipe(it) }
     }
