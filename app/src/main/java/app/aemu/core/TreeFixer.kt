@@ -169,6 +169,23 @@ class TreeFixer(
         keyLayout()
         for (n in LOGS) File(root, "dev/log/$n").let { if (!it.isFile) { it.parentFile?.mkdirs(); it.createNewFile() } }
         /*
+         * Point the guest's log ring at a file on the emulated sdcard.
+         *
+         * Every LOGE/LOGI in the guest goes to /dev/log/main, and on this image that is the only place
+         * SurfaceFlinger says why it exits — its stdout is block-buffered and lost when it returns from
+         * main. Measured: "surfaceflinger exited, code 255" with host-surfaceflinger.log containing
+         * nothing but the separator. /mnt/sdcard is mapped to the real sdcard by the runner, so a link
+         * there makes those lines readable from the host without touching liblog.
+         */
+        File(root, "dev/log/main").let { f ->
+            runCatching {
+                f.parentFile?.mkdirs()
+                if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) f.delete()
+                java.nio.file.Files.createSymbolicLink(
+                    f.toPath(), File("/mnt/sdcard/.aemu-log-main").toPath())
+            }
+        }
+        /*
          * /dev/tty0 must exist as a plain file.
          *
          * DisplayHardwareBase::ConsoleManagerThread opens it to take the console away from the kernel
