@@ -434,9 +434,18 @@ static void wake_proc(struct proc *p) {
     h.flags = SB_F_MAGIC;
     V("   wake pid %d (alarm tid %d fd %d)", p->pid, p->pump->tid, p->pump->fd);
     if (wr_all(p->pump->fd, &h, sizeof h) < 0) {
+        /*
+         * Only forget the pump, never close its descriptor from here.
+         *
+         * This runs on whichever thread is delivering somebody else's work, and the number in
+         * p->pump->fd may already have been handed to a different thread of the same process —
+         * the alarm connection is torn down and rebuilt often. Closing it then killed an
+         * innocent link: servicemanager lost its main connection, its next write failed, and
+         * binder_loop exited with "ioctl failed (Transport endpoint is not connected)", taking
+         * the whole service registry with it. Leaking one descriptor per dead pump is the cheap
+         * side of that trade.
+         */
         V("!! could not wake pid %d: %s", p->pid, strerror(errno));
-        if (p->pump->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, p->pump->fd, 0); close(p->pump->fd); }
-        p->pump->fd = -1;
         p->pump = 0;
     }
 }
@@ -1032,14 +1041,24 @@ static int emit_node(struct node *n, u32 *br) {
              br[0], br[1], br[2], br[3], br[4]);
     return k;
 }
-
 static int deliverable(struct thread *th) {
     // A reply addressed to this thread carries the answer to the call sitting on its stack: the
     // stack is expected to be non-empty, and refusing it there was what kept every reply undelivered
     // and every stack uncleared. Work from the shared queue still needs an idle thread.
+    /*
+     * The alarm thread never reads commands.
+     *
+     * It exists only to receive the wake nudge and turn it into POLLIN on the guest's binder
+     * descriptor (see wake_proc). Writing a BR_REPLY or a transaction to it put a command into a
+     * socket that nobody consumes: measured on servicemanager — "cmd[0] = 0x80287202" followed by
+     * "посылка БЕЗ чтения" — after which its stream was off by one message and binder_loop died
+     * with "ioctl failed (Transport endpoint is not connected)".
+     */
+    if (th->is_pump) return 0;
     if (th->todo.head) return 1;
     return !th->stack && th->proc->todo.head;
-}static int wr_all(int fd, const void *buf, size_t len) {
+}
+static int wr_all(int fd, const void *buf, size_t len) {
     const char *p = buf;
     while (len) {
         ssize_t n = write(fd, p, len);
