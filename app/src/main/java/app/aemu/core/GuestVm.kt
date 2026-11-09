@@ -331,6 +331,24 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          * Starting Connectivity Service.
          */
         overrides["system_init.startsurfaceflinger"] = "0"
+        /*
+         * ro.CONTENT_PROVIDER_ADJ is the one oom_adj entry dhd.props is missing.
+         *
+         * The asset carries nine of them (FOREGROUND/VISIBLE/SECONDARY_SERVER/HEAVY_WEIGHT/BACKUP/
+         * HOME/PERCEPTIBLE/HIDDEN_APP_MIN/EMPTY) but ActivityManagerService also reads this one with
+         * no fallback:
+         *
+         *   Integer.parseInt(SystemProperties.get("ro.CONTENT_PROVIDER_ADJ"))
+         *
+         * Absent means "", parseInt throws NumberFormatException out of the constructor, and the
+         * system server dies before starting a single service:
+         *
+         *   java.lang.NumberFormatException: unable to parse '' as integer
+         *       at com.android.server.am.ActivityManagerService.<init>(ActivityManagerService.java:1232)
+         *
+         * -12 is the value AOSP 1.0 assigns to CONTENT_PROVIDER_ADJ.
+         */
+        overrides["ro.CONTENT_PROVIDER_ADJ"] = "-12"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         /*
          * ro.sf.hw makes SurfaceFlinger take the hardware GL path.
