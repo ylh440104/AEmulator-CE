@@ -181,6 +181,21 @@ class TreeFixer(
          */
         File(root, "dev/tty0").let { if (!it.isFile) { it.createNewFile() } }
         makeFb()
+        /*
+         * Android 1.x: render straight into the mapped framebuffer.
+         *
+         * The emulated fb0 keeps yres_virtual == yres, so libui's EGLDisplaySurface logs "page flipping
+         * not supported", clears PAGE_FLIP and allocates its back buffer with malloc(). SurfaceFlinger
+         * then renders into that heap buffer and swapBuffers() returns without copying it anywhere —
+         * and on this image SurfaceFlinger never gets past its screen loop at all: it never calls
+         * addService, so servicemanager has no "SurfaceFlinger" entry and system_server sits on
+         * "Waiting for sevice SurfaceFlinger..." forever. Measured from the daemon log: 4 addService
+         * calls from servicemanager, 3 from mediaserver, 1 from power — none from SurfaceFlinger.
+         *
+         * The patch makes the no-flip branch hand back the mmap'ed framebuffer as the back buffer, so
+         * there is nothing to copy and PAGE_FLIP no longer matters.
+         */
+        FbDirectPatch.apply(root, img.api, ::log)
     }
     /**
      * Скрипты am/pm/input/monkey… в старых прошивках начинаются с «# Script…» без #!. Ядро на такой

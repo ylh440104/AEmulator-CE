@@ -161,6 +161,22 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
             "ro.FOREGROUND_APP_MEM" to "2048", "ro.VISIBLE_APP_MEM" to "3072", "ro.PERCEPTIBLE_APP_MEM" to "4096",
             "ro.HEAVY_WEIGHT_APP_MEM" to "4096", "ro.SECONDARY_SERVER_MEM" to "6144", "ro.BACKUP_APP_MEM" to "6144",
             "ro.HOME_APP_MEM" to "6144", "ro.HIDDEN_APP_MEM" to "7168", "ro.EMPTY_APP_MEM" to "8192",
+            /*
+             * ActivityManagerService reads these two as well, with no fallback:
+             *
+             *   Integer.parseInt(SystemProperties.get("ro.CONTENT_PROVIDER_ADJ"))
+             *
+             * An absent value is "", parseInt throws NumberFormatException out of the AMS constructor,
+             * and the system server exits before starting a single service:
+             *
+             *   java.lang.NumberFormatException: unable to parse '' as integer
+             *       at com.android.server.am.ActivityManagerService.<init>(ActivityManagerService.java:1232)
+             *
+             * Measured on the ADP1 image: the property area had 84 entries with nine *_ADJ keys and the
+             * boot stopped right after "Starting Power Manager". 14 and 7680 are the AOSP values for the
+             * content provider slot.
+             */
+            "ro.CONTENT_PROVIDER_ADJ" to "14", "ro.CONTENT_PROVIDER_MEM" to "7680",
         )
         private val NET_DEFAULTS = listOf(
             "net.tcp.buffersize.default" to "4096,87380,110208,4096,16384,110208",
