@@ -1501,7 +1501,27 @@ static void on_message(struct thread *th) {
         }
         return;
     }
-    if ((size_t)n != sizeof h) return;
+    /*
+     * Finish the header; never return with bytes still in the socket.
+     *
+     * recvmsg on a stream socket is free to hand back fewer bytes than the header, and the old
+     * "if (n != sizeof h) return;" dropped the loop with that partial header still queued. Level
+     * triggered epoll then fired again immediately, read the same bytes again, and returned again —
+     * daemon never touched another connection. Measured: 557559 connect() attempts from the guests
+     * against 14 accepts, the log frozen at 114 lines right after "out of sync: len=0 type=16
+     * tid=11 flags=0x72ac", which is exactly a header read from the wrong offset.
+     */
+    while ((size_t)n < sizeof h) {
+        ssize_t r = recv(th->fd, (char *)&h + n, sizeof h - (size_t)n, 0);
+        if (r > 0) { n += r; continue; }
+        if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            static unsigned partial_spins;
+            if (++partial_spins > 200) { partial_spins = 0; return; }
+            usleep(200);
+            continue;
+        }
+        return;
+    }
     if ((h.flags & SB_F_MAGIC_MASK) != SB_F_MAGIC) {
         logf_("sensesbinderd: ★ out of sync: len=%u type=%u tid=%u flags=%#x", h.len, h.type, h.tid, h.flags);
         return;
@@ -1768,6 +1788,19 @@ int main(int argc, char **argv) {
             continue;
         }
         for (int i = 0; i < n; i++) {
+            /*
+             * Heartbeat: once a second, say whether the loop is still turning.
+             *
+             * guests queued 557559 connect() attempts against 14 accepts while the log stopped at
+             * 111 lines, so either epoll_wait stopped returning or a handler stopped returning. This
+             * line separates the two: if it keeps printing, the loop turns and the stall is inside a
+             * handler; if it goes silent, the loop itself is stuck.
+             */
+            {
+                static time_t hb_last;
+                time_t now = time(0);
+                if (now != hb_last) { hb_last = now; V("binder: heartbeat n=%d ptr=%p", n, evs[i].data.ptr); }
+            }
             if (!evs[i].data.ptr) {
                 int fd = accept4(ls, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK);
                 if (fd >= 0) {
