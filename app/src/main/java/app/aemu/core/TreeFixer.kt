@@ -210,9 +210,11 @@ class TreeFixer(
          * liblog opens. "/dev/log/main" is 13 bytes plus NUL; "/dev/stdout" fits in the same slot with
          * the remaining bytes zeroed, so nothing else in the library has to move.
          */
-        runCatching {
-            /*
-             * A plain file, not a link to /proc/self/fd/1.
+        /*
+         * Android 1.x only. On 2.x+ liblog works and its ring is what logcat reads — rewriting the
+         * path there breaks the whole logging system of the guest.
+         */
+        if (img.api < 4) runCatching {
              *
              * The link was the first attempt and it silently failed: qemu's linux-user does not give
              * the guest a working /proc/self/fd, so liblog's open() returned an error, it dropped the
@@ -1249,7 +1251,16 @@ class TreeFixer(
                  * a real length the same image reports "EGL informations" and the compositor comes
                  * up. The file is sparse, so the length costs no storage.
                  */
-                if (n == "ashmem" && it.length() < (1 shl 20)) {
+                /*
+                 * Android 1.x only: ashmem as a plain file with a length.
+                 *
+                 * MemoryHeapBase mmaps /dev/ashmem, and a zero length file cannot be mapped, which left
+                 * SurfaceFlinger stopped right after "Initializing graphics H/W". 1.x has no other heap
+                 * provider, so it needs the length. 2.x+ images carry their own ashmem path in the engine
+                 * and must be left exactly as they were — sizing the file here made working 2.x builds
+                 * fail.
+                 */
+                if (img.api < 4 && n == "ashmem" && it.length() < (1 shl 20)) {
                     java.io.RandomAccessFile(it, "rw").use { f -> f.setLength(1L shl 20) }
                 }
             }

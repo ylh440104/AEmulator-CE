@@ -225,6 +225,15 @@ class GuestRunner(
          * this ADP1 image: signal 11 went from present on every boot to 0.
          */
         if (img.api < 4) e["DHD_NO_SMC"] = "1"
+        /*
+         * Android 1.x only: let the translator execute code out of readable pages.
+         *
+         * pixelflinger generates scanline code into the heap and jumps into it inside one translation
+         * block, and nothing in this firmware ever asks for PROT_EXEC. Without this the fetch is
+         * refused and SurfaceFlinger/mediaserver die before printing anything. 2.x+ images run fine
+         * with the strict check, so the switch stays off for them.
+         */
+        if (img.api < 4) e["DHD_READ_EXEC"] = "1"
         if (noTcgOpt) e["DHD_NO_TCGOPT"] = "1"
         // 1.x/2.x early: the Glide assembler and the dalvik JIT emit ARM code into anonymous pages at runtime;
         // qemu's page-attribute SMC detection misses some of those writes on old kernels and the guest dies with
@@ -240,7 +249,8 @@ class GuestRunner(
                 "DHD_BINDER_LOG" to "GUEST_BINDER_LOG", "DHD_CREDS" to "GUEST_CREDS",
                 "DHD_SDCARD" to "GUEST_SDCARD", "DHD_INPUT_ST" to "GUEST_INPUT_ST",
                 "DHD_BINDER_VERBOSE" to "GUEST_BINDER_VERBOSE", "DHD_DNS53" to "GUEST_DNS53",
-                "DHD_NO_SMC" to "GUEST_NO_SMC", "DHD_NO_TCGOPT" to "GUEST_NO_TCGOPT"
+                "DHD_NO_SMC" to "GUEST_NO_SMC", "DHD_NO_TCGOPT" to "GUEST_NO_TCGOPT",
+                "DHD_READ_EXEC" to "GUEST_READ_EXEC"
             )) e[d]?.let { e[g] = it }
             e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
             e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }

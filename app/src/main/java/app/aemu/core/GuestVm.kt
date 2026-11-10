@@ -334,7 +334,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          * system with no compositor at all: system_server then waits on "Waiting for sevice
          * SurfaceFlinger..." until it is killed.
          */
-        overrides["system_init.startsurfaceflinger"] = "1"
+        /*
+         * Android 1.x only: its standalone surfaceflinger is a 204-byte stub, so the compositor has to
+         * be the one system_init() creates inside system_server. Every other release on this engine
+         * starts surfaceflinger as its own init service and must keep the framework default.
+         */
+        if (img.api < 4) overrides["system_init.startsurfaceflinger"] = "1"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         /*
          * ro.sf.hw makes SurfaceFlinger take the hardware GL path.
@@ -350,7 +355,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          * stopped Android 1.0 at Starting Connectivity Service while every binder call was working.
          * Without a GPU the software path has to be selected explicitly.
          */
-        if (!s.gpu) overrides["ro.sf.hw"] = "0"
+        if (!s.gpu && img.api < 4) overrides["ro.sf.hw"] = "0"
         overrides["qemu.gles"] = if (s.gpu) "1" else "0"
         if (engine == Engine.N64) {             // SwiftShader (GLES 2/3 on the CPU) where the engine has it for this release
             // (8.0+ libEGL picks the driver by name: 1 is the emulator's host GPU pipe, 2 is SwiftShader)
