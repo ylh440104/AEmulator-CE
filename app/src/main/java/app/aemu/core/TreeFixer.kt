@@ -197,6 +197,45 @@ class TreeFixer(
          * calls went from 2 to 9.
          */
         File(root, "dev/tty0").let { if (!it.isFile) { it.createNewFile() } }
+        /*
+         * Let liblog write to stderr so LOGE is visible from the host.
+         *
+         * On this image SurfaceFlinger and mediaserver exit with code 255 — main() returning an error —
+         * and the reason is only ever written through LOGE, which liblog sends to /dev/log/main. Their
+         * stdout is block buffered, so the files end up holding nothing but the banner: measured,
+         * host-surfaceflinger.log was 264 bytes of separator lines. /dev/log/main cannot simply be
+         * replaced, it is opened by path from liblog.
+         *
+         * Instead: create /dev/stdout as a link to the guest's own fd 1, and rewrite the string
+         * liblog opens. "/dev/log/main" is 13 bytes plus NUL; "/dev/stdout" fits in the same slot with
+         * the remaining bytes zeroed, so nothing else in the library has to move.
+         */
+        runCatching {
+            File(root, "dev/stdout").let { f ->
+                if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) f.delete()
+                java.nio.file.Files.createSymbolicLink(f.toPath(), File("/proc/self/fd/1").toPath())
+            }
+            val liblog = File(root, "system/lib/liblog.so")
+            if (liblog.isFile) {
+                val b = liblog.readBytes()
+                val from = "/dev/log/main".toByteArray(Charsets.ISO_8859_1)
+                val to = "/dev/stdout".toByteArray(Charsets.ISO_8859_1)
+                var hit = -1
+                for (i in 0..(b.size - from.size)) {
+                    var ok = true
+                    for (k in from.indices) if (b[i + k] != from[k]) { ok = false; break }
+                    if (ok) { hit = i; break }
+                }
+                if (hit < 0) log("log: liblog has no /dev/log/main string, LOGE stays invisible")
+                else if (b[hit + from.size] != 0.toByte()) { /* already part of a longer path */ }
+                else {
+                    for (k in to.indices) b[hit + k] = to[k]
+                    for (k in to.size until from.size + 1) b[hit + k] = 0
+                    liblog.writeBytes(b)
+                    log("log: liblog now writes to /dev/stdout, LOGE reaches the log files")
+                }
+            }
+        }
         makeFb()
         /*
          * Android 1.x: render straight into the mapped framebuffer.
