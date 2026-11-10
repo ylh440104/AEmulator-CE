@@ -215,7 +215,8 @@ class TreeFixer(
          * path there breaks the whole logging system of the guest.
          */
         if (img.api < 4) runCatching {
-             *
+            /*
+             * A plain file, not a link to /proc/self/fd/1.
              * The link was the first attempt and it silently failed: qemu's linux-user does not give
              * the guest a working /proc/self/fd, so liblog's open() returned an error, it dropped the
              * write, and the log stayed empty — the very thing this is meant to fix. A real file in
