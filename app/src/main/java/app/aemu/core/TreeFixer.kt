@@ -211,9 +211,20 @@ class TreeFixer(
          * the remaining bytes zeroed, so nothing else in the library has to move.
          */
         runCatching {
+            /*
+             * A plain file, not a link to /proc/self/fd/1.
+             *
+             * The link was the first attempt and it silently failed: qemu's linux-user does not give
+             * the guest a working /proc/self/fd, so liblog's open() returned an error, it dropped the
+             * write, and the log stayed empty — the very thing this is meant to fix. A real file in
+             * the tree always opens, and the host can read it afterwards.
+             */
             File(root, "dev/stdout").let { f ->
+                f.parentFile?.mkdirs()
                 if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) f.delete()
-                java.nio.file.Files.createSymbolicLink(f.toPath(), File("/proc/self/fd/1").toPath())
+                f.createNewFile()
+                f.setReadable(true, false)
+                f.setWritable(true, false)
             }
             val liblog = File(root, "system/lib/liblog.so")
             if (liblog.isFile) {
