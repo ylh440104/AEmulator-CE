@@ -133,6 +133,20 @@ object CrashDigest {
             if (f.length() > (4L shl 20)) return@forEach
             runCatching { f.copyTo(File(out, "run-${f.name}"), true) }
         }
+        /*
+         * The guest's LOGE/LOGI, when liblog has been pointed at /dev/stdout.
+         *
+         * TreeFixer rewrites liblog's "/dev/log/main" to "/dev/stdout" and leaves a plain file there,
+         * because the block buffered stdout of SurfaceFlinger and mediaserver loses everything they
+         * say before exiting. Those lines then land in <root>/dev/stdout and never reach the binary
+         * ring that GuestLog.tail reads above, so they have to be copied separately — without this
+         * the very log that explains "surfaceflinger exited, code 255" is collected into nothing.
+         */
+        runCatching {
+            File(paths.root, "dev/stdout").takeIf { it.isFile && it.length() > 0 }?.let { src ->
+                src.copyTo(File(out, "guest-stdout.log"), true)
+            }
+        }
         // a crash inside the app itself, when one was recorded
         runCatching { CrashReport.lastText(ctx)?.let { File(out, "app-crash.txt").writeText(it) } }
         return out
