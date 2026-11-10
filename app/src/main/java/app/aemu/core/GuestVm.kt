@@ -315,22 +315,26 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
          */
         overrides["ro.kernel.qemu"] = if (engine == Engine.GB || img.api < 4) "0" else "1"
         /*
-         * Keep system_server from starting a second SurfaceFlinger inside itself.
+         * Let system_server start SurfaceFlinger inside itself — that is the only one this image has.
          *
-         * system_init() of this era reads this property and, when it is "1", calls
-         * SurfaceFlinger::instantiate() — libsystem_server.so strcmp at +0x1292. With the
-         * property missing, property_get hands back the default "1", so the framework built a
-         * SurfaceFlinger inside system_server while the real surfaceflinger process was already
-         * running and registered. Two compositors then fought over the "SurfaceFlinger" entry in
-         * servicemanager, and which one won changed from boot to boot: ActivityManager would sit
-         * in "Waiting for sevice SurfaceFlinger..." or "SurfaceFlinger not published, waiting..."
-         * for the whole run, and the boot stalled at Starting Activity Manager.
+         * /system/bin/surfaceflinger here is a 5340-byte stub: its whole .text is
          *
-         * init.rc on a real device starts surfaceflinger as its own service, so this property is
-         * 0 there. Setting it here makes the emulator match, and system_server then reaches
-         * Starting Connectivity Service.
+         *     85d0: mov r0, sp
+         *     85d8: add r2, pc, #4      ; "main" = 0x85e4
+         *     85e0: b   __libc_init
+         *     85e4: b   IPCThreadState::joinThreadPool()
+         *
+         * It never calls a SurfaceFlinger entry point, and no library in the tree exports one — so it
+         * joins an empty pool and returns, and the service exits with code 255 having logged nothing at
+         * all (measured: guest-stdout.log contains zero occurrences of "SurfaceFlinger"). The real
+         * compositor is the one system_init() creates, and an ADP1 build has no init.rc setprop for
+         * this flag, so the firmware default "1" is what runs it.
+         *
+         * Setting it to 0 — which an earlier version of this file did — turns that off and leaves the
+         * system with no compositor at all: system_server then waits on "Waiting for sevice
+         * SurfaceFlinger..." until it is killed.
          */
-        overrides["system_init.startsurfaceflinger"] = "0"
+        overrides["system_init.startsurfaceflinger"] = "1"
         overrides["ro.kernel.qemu.gles"] = if (s.gpu && (s.hwui || engine == Engine.GB)) "1" else "0"
         /*
          * ro.sf.hw makes SurfaceFlinger take the hardware GL path.
