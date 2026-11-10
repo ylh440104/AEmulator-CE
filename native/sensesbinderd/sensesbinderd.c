@@ -1409,7 +1409,19 @@ static void proc_release(struct proc *p) {
             th->todo.head = th->todo.tail = 0;
         }
         if (th->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); }
-        free(th);
+        /*
+         * Detach, never free.
+         *
+         * epoll_wait may already have returned a batch of events that names another descriptor of
+         * this same process. Freeing the structures here leaves those pending entries pointing at
+         * released memory, and the next one dereferenced kills the daemon: measured on the ADP1
+         * image — SurfaceFlinger's two links close, then "binderd exited, code 139" (SIGSEGV), after
+         * which every binder call fails and SurfaceFlinger itself returns from main with -1 (exit 255).
+         * Marking them is enough: on_message() ignores a thread whose proc is gone.
+         */
+        th->fd = -1;
+        th->proc = 0;
+        th->next = 0;
     }
     for (u32 i = 0; i < NHASH; i++) {
         struct node *n = p->nodes[i];
