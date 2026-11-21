@@ -997,7 +997,12 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     if (reply) {
         in_reply_to = th->stack;
         V("   reply from pid %d: stack=%s", p->pid, in_reply_to ? "yes" : "EMPTY");
-        if (!in_reply_to) { sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return; }
+        if (!in_reply_to || in_reply_to->to_thread != th) {
+            sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
+            sb_send(th, SB_R_FAILED_REPLY, 0, 0, 0, 0, 0);
+            txn_free(t);
+            return;
+        }
         // Two frames were pushed for this call: one on the caller, when the transaction went out,
         // and one on whoever received it, when it was handed over. Only the receiver's frame was
         // being popped here, and with the caller's parent pointer on top of that, so every call
@@ -1036,6 +1041,17 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
         }
         t->target = n;
         to = n->owner;
+        if (!(t->flags & TF_ONE_WAY)) {
+            struct txn *parent = th->stack;
+            for (int level = 0; parent && level < 64; level++) {
+                if (parent->to_thread != th) break;
+                if (parent->from && parent->from->proc == to && parent->from->fd >= 0) {
+                    target_thread = parent->from;
+                    break;
+                }
+                parent = parent->to_parent;
+            }
+        }
     }
     t->to_proc = to;
     if (!reply) {
