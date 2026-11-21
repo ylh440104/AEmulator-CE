@@ -1,5 +1,5 @@
 set -eu
-apk add --no-cache build-base meson samurai pkgconf python3 py3-pip py3-setuptools py3-distlib bison flex linux-headers glib-dev glib-static pcre2-static libffi-dev libffi-static zlib-dev zlib-static curl tar xz git
+apk add --no-cache build-base meson samurai pkgconf python3 py3-pip py3-setuptools py3-distlib bison flex linux-headers glib-dev glib-static pcre2-dev libffi-dev zlib-dev zlib-static curl tar xz git
 mkdir -p /work/downloads /work/out
 cd /work/downloads
 curl -fL --retry 5 --retry-all-errors -C - https://download.qemu.org/qemu-8.2.4.tar.xz -o qemu-8.2.4.tar.xz
