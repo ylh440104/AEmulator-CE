@@ -1,0 +1,106 @@
+name: Android 1 engine and APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/android1-binder]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test Binder protocol
+        run: |
+          mkdir -p out
+          gcc -O1 -g -D_GNU_SOURCE -Wall -Wextra -Wno-unused-function -fsanitize=address,undefined -fno-omit-frame-pointer -o out/sensesbinderd-test native/sensesbinderd/sensesbinderd.c
+          ASAN_OPTIONS=detect_leaks=0 BINDERD="$PWD/out/sensesbinderd-test" python3 tests/test_binderd.py 2>&1 | tee out/binder-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android1-protocol-${{ github.sha }}
+          path: |
+            out/
+            /tmp/sbtest_*/daemon.log
+          retention-days: 30
+  engine:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build static ARM64 translator
+        run: |
+          mkdir -p engine-work
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/engine-work:/work" -e BUILD_COMMIT="${GITHUB_SHA}" alpine:3.20 sh /src/ci/build-engine.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android1-engine-${{ github.sha }}
+          path: engine-work/out/*
+          if-no-files-found: error
+          retention-days: 30
+  apk:
+    needs: [protocol, engine]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: android1-engine-${{ github.sha }}
+          path: engine-out
+      - name: Build Android daemon and signed APK
+        env:
+          AEMU_KEYSTORE_B64: ${{ secrets.AEMU_KEYSTORE_B64 }}
+          AEMU_KEYSTORE_PASSWORD: ${{ secrets.AEMU_KEYSTORE_PASSWORD }}
+          AEMU_KEY_ALIAS: ${{ secrets.AEMU_KEY_ALIAS }}
+          AEMU_KEY_PASSWORD: ${{ secrets.AEMU_KEY_PASSWORD }}
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SM" --licenses >/dev/null 2>&1 || true
+          "$SM" "platforms;android-36" "build-tools;35.0.0" "ndk;27.2.12479018"
+          printf 'sdk.dir=%s\n' "$SDK" > local.properties
+          CC="$SDK/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$CC" -O2 -D_GNU_SOURCE -Wall -Wno-unused-function -Wl,-z,max-page-size=16384 -o app/src/main/jniLibs/arm64-v8a/libsensesbinderd.so native/sensesbinderd/sensesbinderd.c
+          cp engine-out/libqemu_senses.so app/src/main/jniLibs/arm64-v8a/libqemu_senses.so
+          test -n "$AEMU_KEYSTORE_B64"
+          printf '%s' "$AEMU_KEYSTORE_B64" | base64 -d > release.keystore
+          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$AEMU_KEYSTORE_PASSWORD" "$AEMU_KEY_ALIAS" "$AEMU_KEY_PASSWORD" > keystore.properties
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace :app:testStandardDebugUnitTest :app:assembleStandardRelease
+          mkdir -p out
+          cp app/build/outputs/apk/standard/release/*.apk out/AEmulator-CE-Android1-arm64.apk
+          "$SDK/build-tools/35.0.0/apksigner" verify --print-certs out/AEmulator-CE-Android1-arm64.apk > out/apk-signature.txt
+          "$SDK/build-tools/35.0.0/aapt2" dump badging out/AEmulator-CE-Android1-arm64.apk > out/apk-badging.txt
+          python3 ci/verify_apk.py out/AEmulator-CE-Android1-arm64.apk
+          cp engine-out/engine-build-manifest.txt out/
+          cp engine-out/qemu-corresponding-source.tar.xz out/
+          cd out
+          sha256sum *.apk > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android1-apk-${{ github.sha }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android1-ci-${{ github.run_number }}
+          name: Android 1 修复构建 ${{ github.run_number }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: 修复 Binder 定向回复、流式收发和引用身份，包含本次重编译的 ARM64 引擎。
+          files: out/*

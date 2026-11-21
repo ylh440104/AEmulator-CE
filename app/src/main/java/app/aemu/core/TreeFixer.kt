@@ -138,6 +138,7 @@ class TreeFixer(
         if (owners) seedOwners()
         installEngineFiles()
         restorePixelflinger()
+        if (img.api < 4) Android1Repairs.apply(root, log)
         protectOat()
         fixThemeXml()
         parkWhetstone()
@@ -214,42 +215,6 @@ class TreeFixer(
          * Android 1.x only. On 2.x+ liblog works and its ring is what logcat reads — rewriting the
          * path there breaks the whole logging system of the guest.
          */
-        if (img.api < 4) runCatching {
-            /*
-             * A plain file, not a link to /proc/self/fd/1.
-             * The link was the first attempt and it silently failed: qemu's linux-user does not give
-             * the guest a working /proc/self/fd, so liblog's open() returned an error, it dropped the
-             * write, and the log stayed empty — the very thing this is meant to fix. A real file in
-             * the tree always opens, and the host can read it afterwards.
-             */
-            File(root, "dev/stdout").let { f ->
-                f.parentFile?.mkdirs()
-                if (f.exists() || java.nio.file.Files.isSymbolicLink(f.toPath())) f.delete()
-                f.createNewFile()
-                f.setReadable(true, false)
-                f.setWritable(true, false)
-            }
-            val liblog = File(root, "system/lib/liblog.so")
-            if (liblog.isFile) {
-                val b = liblog.readBytes()
-                val from = "/dev/log/main".toByteArray(Charsets.ISO_8859_1)
-                val to = "/dev/stdout".toByteArray(Charsets.ISO_8859_1)
-                var hit = -1
-                for (i in 0..(b.size - from.size)) {
-                    var ok = true
-                    for (k in from.indices) if (b[i + k] != from[k]) { ok = false; break }
-                    if (ok) { hit = i; break }
-                }
-                if (hit < 0) log("log: liblog has no /dev/log/main string, LOGE stays invisible")
-                else if (b[hit + from.size] != 0.toByte()) { /* already part of a longer path */ }
-                else {
-                    for (k in to.indices) b[hit + k] = to[k]
-                    for (k in to.size until from.size + 1) b[hit + k] = 0
-                    liblog.writeBytes(b)
-                    log("log: liblog now writes to /dev/stdout, LOGE reaches the log files")
-                }
-            }
-        }
         makeFb()
         /*
          * Android 1.x: render straight into the mapped framebuffer.

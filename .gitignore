@@ -17,3 +17,7 @@ keystore.properties
 *.keystore
 release-apks/
 .kotlin/
+
+# local only: handover notes are never committed
+HANDOVER.md
+handover*.md

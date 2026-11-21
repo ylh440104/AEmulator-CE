@@ -254,6 +254,7 @@ class GuestRunner(
             )) e[d]?.let { e[g] = it }
             e["DHD_BINDER"]?.let { e["GUEST_BINDER"] = it }
             e["DHD_INPUT"]?.let { e["GUEST_INPUT"] = it }
+            e["GUEST_ANDROID_LOG"] = "1"
         }
         for (t in userTokens.filter(::isEnvToken)) e[t.substringBefore('=')] = t.substringAfter('=')
         e.putAll(extra)

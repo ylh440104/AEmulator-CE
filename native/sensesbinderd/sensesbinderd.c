@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -12,6 +14,7 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include "sb_proto.h"
+#include "sb_transport.h"
 
 typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -41,7 +44,7 @@ struct thread;
 static struct thread *g_cur_th;
 static int emit_node(struct node *n, u32 *br);
 
-enum { W_TXN = 1, W_COMPLETE, W_NODE, W_DEAD_BINDER, W_CLEAR_DONE, W_ERROR, W_ACK, W_SPAWN };
+enum { W_TXN = 1, W_COMPLETE, W_NODE, W_DEAD_BINDER, W_CLEAR_DONE, W_ERROR, W_ACK, W_SPAWN, W_REF };
 
 struct work { struct work *next; int type; struct txn *t; struct node *node; u64 cookie; u32 err; u32 ack_type; };
 struct wq { struct work *head, *tail; };
@@ -70,6 +73,7 @@ struct node {
 struct held { struct ref *ref; struct node *node; int strong; };
 
 struct dbuf {
+    u32 id;
     struct dbuf *prev, *next;
     struct proc *proc;
     struct node *async_node;
@@ -101,6 +105,7 @@ struct thread {
     struct txn *stack;
     struct thread *next;
     u32 iseq;
+    struct sb_io io;
 };
 
 #define NHASH 256
@@ -117,15 +122,18 @@ struct proc {
     u32 nrefs;
     struct node *nodes[NHASH];
     struct dbuf *bufs;
+    u32 next_buf;
     struct proc *next;
 };
 
 static struct proc *procs;
 static struct node *ctx_mgr;
+static int g_listen_fd = -1;
 /** the thread that made itself the context manager: lookups go to it and to nobody else */
 static struct thread *ctx_th;
 static struct thread *cur;
 static int ep, verbose;
+static char g_bind_path[108];
 
 static void logf_(const char *fmt, ...) {
     va_list ap;
@@ -161,11 +169,13 @@ static struct work *mkwork(int type) {
     return w;
 }
 
+#include "sb_transport.inc"
+
 static void deliver(struct thread *th);
 static void kick_proc(struct proc *p);
 static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, const int *fds, int nfds, u32 flags);
 static void node_work(struct node *n) {
-    if (!n || !n->owner) return;
+    if (!n || !n->owner || !n->ptr) return;
     if (n->queued) return;
     /*
      * The owner only has something to do when what it has been told differs from what is true.
@@ -181,8 +191,11 @@ static void node_work(struct node *n) {
      * should have given back, and the pool thread later walked a wp<> that had already been
      * cut loose — the fault at libandroid_runtime +0x3688a over a null object.
      */
-    int strong = n->internal_strong;
-    int weak = n->nrefs > 0 || strong;
+    int strong = n->local_strong > 0;
+    for (struct ref *r = n->refs; r; r = r->next_in_node)
+        if (r->strong > 0) strong = 1;
+    n->internal_strong = strong;
+    int weak = n->nrefs > 0 || n->local_weak > 0 || strong;
     /*
      * A node that lost its last handle still owes the owner a BR_RELEASE, so it must not be
      * skipped here. emit_node turns strong off in that case and sends the release; returning
@@ -195,7 +208,10 @@ static void node_work(struct node *n) {
     struct work *w = mkwork(W_NODE);
     w->node = n;
     n->queued = 1;
-    wq_push(&n->owner->todo, w);
+    if (g_cur_th && g_cur_th->proc == n->owner && g_cur_th->fd >= 0)
+        wq_push(&g_cur_th->todo, w);
+    else
+        wq_push(&n->owner->todo, w);
     /*
      * Do not kick the process whose own ioctl is being answered right now.
      *
@@ -275,10 +291,12 @@ static struct node *node_get(struct proc *p, u64 ptr, u64 cookie, int create) {
  * raised here directly instead of through a ref.
  */
 static void ref_inc_home(struct txn *t, struct node *n, int strong) {
-    if (strong && n->owner) {
-        n->internal_strong = 1;
+    if (n->owner) {
+        if (strong) n->local_strong++;
+        else n->local_weak++;
         t->held[t->nheld].node = n;
-        t->held[t->nheld++].strong = 1;
+        t->held[t->nheld++].strong = strong;
+        node_work(n);
     }
 }
 static void ref_add_node(struct ref *r, struct node *n) {
@@ -301,7 +319,7 @@ static struct ref *ref_for_node(struct proc *p, struct node *n) {
      * wrong object and reported "not published, waiting..." forever.
      */
     for (struct ref *r = n->refs; r; r = r->next_in_node)
-        if (r->proc && r->proc->pid == p->pid) return r;
+        if (r->proc == p) return r;
     if (p->nrefs == 0) {
         /* descriptor 0 is the context manager and is never handed out */
         p->refs = zalloc(sizeof(struct ref *) * 2);
@@ -359,6 +377,22 @@ static void ref_delete(struct ref *r) {
 
 static void ref_inc(struct ref *r, int strong) {
     if (strong) r->strong++; else r->weak++;
+    node_work(r->node);
+    /*
+     * Tell the holder its descriptor exists.
+     *
+     * The kernel does this from binder_inc_ref: the receiving process gets BR_INCREFS (and
+     * BR_ACQUIRE for a strong reference) carrying the handle it was just given, and only then
+     * can it resolve that number. Here nothing was sent at all, so a handle allocated by
+     * ref_for_node existed only in the daemon's table.
+     *
+     * Measured on this image: addService reached servicemanager with
+     *   obj[0] type=0x73682a85 binder=0x1 cookie=0x0
+     * and answered -1, because handle 1 was not in its table — the daemon had never told it.
+     * Every getService that followed was answered ffffffff from the same cause: 62 lookups,
+     * 3 replies, all failures, and the boot sat there.
+     */
+    if (0 && r->proc && r->node) { (void)strong; }
 }
 
 static void ref_dec(struct ref *r, int strong) {
@@ -374,6 +408,7 @@ static void held_release(struct held *h, int n) {
         if (h[i].node) {
             if (h[i].strong) { if (h[i].node->local_strong > 0) h[i].node->local_strong--; }
             else { if (h[i].node->local_weak > 0) h[i].node->local_weak--; }
+            node_work(h[i].node);
             node_free_if_unused(h[i].node);
         }
     }
@@ -391,10 +426,9 @@ static void txn_free(struct txn *t) {
 
 static struct thread *ready_thread(struct proc *p) {
     for (struct thread *th = p->threads; th; th = th->next)
-        if (th->waiting && !th->is_pump && !th->stack && !th->todo.head) return th;
+        if (th->fd >= 0 && th->waiting && !th->is_pump && !th->stack && !th->todo.head) return th;
     return 0;
 }
-static int wr_all(int fd, const void *buf, size_t len);
 
 /**
  * Tell a process that work is waiting. guest_binder.c keeps one connection per process whose only
@@ -423,34 +457,28 @@ static void ask_for_thread(struct proc *p) {
 }
 
 static void wake_proc(struct proc *p) {
-    if (!p->pump || p->pump->fd < 0) return;
-    struct sb_hdr h;
-    memset(&h, 0, sizeof h);
-    h.len = sizeof h;
-    // the alarm thread does not look at the type, it just needs a well-formed header to know it is
-    // a real message and not a desynchronised stream
-    h.type = SB_R_OK;
-    h.tid = (u32)p->pump->tid;
-    h.flags = SB_F_MAGIC;
-    V("   wake pid %d (alarm tid %d fd %d)", p->pid, p->pump->tid, p->pump->fd);
-    if (wr_all(p->pump->fd, &h, sizeof h) < 0) {
-        /*
-         * Only forget the pump, never close its descriptor from here.
-         *
-         * This runs on whichever thread is delivering somebody else's work, and the number in
-         * p->pump->fd may already have been handed to a different thread of the same process —
-         * the alarm connection is torn down and rebuilt often. Closing it then killed an
-         * innocent link: servicemanager lost its main connection, its next write failed, and
-         * binder_loop exited with "ioctl failed (Transport endpoint is not connected)", taking
-         * the whole service registry with it. Leaking one descriptor per dead pump is the cheap
-         * side of that trade.
-         */
-        V("!! could not wake pid %d: %s", p->pid, strerror(errno));
-        p->pump = 0;
-    }
+    if (p->pump && p->pump->fd >= 0 && !p->pump->io.head)
+        sb_send(p->pump, SB_R_OK, 0, 0, 0, 0, 0);
 }
 
 static void kick_proc(struct proc *p) {
+    /*
+     * This function is re-entered through its own tail: deliver() ends in a call back here, and
+     * here we call deliver() again. On system_server that recursion never unwound: the daemon
+     * printed the same stuck/wake pair for minutes, its main thread sat in waiting=1 stack=yes,
+     * nothing was accepted on the listening socket, and every connecting guest was told
+     * "Connection refused".
+     *
+     * A nesting counter turns an unbounded descent into a plain return. The work stays on the
+     * queue; the outermost kick delivers it when the stack unwinds.
+     */
+    static __thread int depth;
+    if (depth > 4) {
+        if (depth == 5)
+            logf_("sensesbinderd: kick_proc nesting %d on pid %d", depth, p ? p->pid : 0);
+        return;
+    }
+    depth++;
     struct thread *th;
     /*
      * Bound the loop.
@@ -474,6 +502,37 @@ static void kick_proc(struct proc *p) {
     // main thread only runs a frame loop (surfaceflinger) never blocks in ioctl, so writing to a
     // thread is not an option — the alarm thread turns this into POLLIN on the guest's binder
     // descriptor and the guest comes to collect the transaction itself.
+    /*
+     * A spawn request that no idle thread can carry goes to the main thread anyway.
+     *
+     * ready_thread() skips a thread that is waiting for a reply, and on this image that is the
+     * only thread some processes have. W_SPAWN then stayed in the queue forever: the daemon
+     * printed
+     *   ask pid N for another binder thread (1/15)
+     * again and again, started never grew, and every pass through kick_proc fell into the
+     * stuck/wake loop — 19424 lines in one run. That loop is what kept the main thread out of
+     * the accept path, so a new guest connection was reset by peer during its HELLO and every
+     * later call on it failed with "Socket not connected".
+     *
+     * BR_SPAWN_LOOPER does not need an idle thread to act on: libbinder reads it out of the
+     * read buffer and starts a pool thread itself. Handing it to whichever thread exists is
+     * strictly better than never delivering it.
+     */
+    if (p->todo.head) {
+        for (struct work *w = p->todo.head, *prev = 0; w; prev = w, w = w->next) {
+            if (w->type != W_SPAWN) continue;
+            struct thread *dst = 0;
+            for (struct thread *d = p->threads; d; d = d->next)
+                if (!d->is_pump) { dst = d; break; }
+            if (!dst) break;
+            if (prev) prev->next = w->next; else p->todo.head = w->next;
+            if (p->todo.tail == w) p->todo.tail = prev;
+            V("   -> pid %d/%d fd %d: spawn looper (forced)", p->pid, dst->tid, dst->fd);
+            sb_send(dst, SB_R_SPAWN, 0, 0, 0, 0, 0);
+            free(w);
+            break;
+        }
+    }
     if (p->todo.head) {
         for (struct thread *d = p->threads; d; d = d->next)
             V("   stuck: tid %d fd %d%s waiting=%d stack=%s todo=%s", d->tid, d->fd,
@@ -482,6 +541,8 @@ static void kick_proc(struct proc *p) {
         ask_for_thread(p);
         wake_proc(p);
     }
+    depth--;
+
     // Only a thread that said SB_WAIT is reading the socket. A thread that merely opened a connection
     // and never waited is not: whatever lands on it sits in the buffer and nothing consumes it. That
     // is how the third lookup went to servicemanager's second connection (tid 943) while its main
@@ -516,10 +577,17 @@ static void queue_txn(struct txn *t, struct thread *target) {
      * reached servicemanager, and the boot stopped at "Waiting for service SurfaceFlinger"
      * while the daemon logged "ask pid ... for another binder thread" over and over.
      */
-    if (target && deliverable(target)) {
+    if (target) {
         wq_push(&target->todo, w);
-        deliver(target);
-        if (!target->todo.head) return;
+        if (target->waiting) deliver(target);
+        return;
+    }
+    if (!t->reply && (t->flags & TF_ONE_WAY) && t->target) {
+        if (t->target->has_async) {
+            wq_push(&t->target->async, w);
+            return;
+        }
+        t->target->has_async = 1;
     }
     if (t->target && t->target == ctx_mgr) {
         struct thread *main_th = main_thread_of(t->to_proc);
@@ -545,7 +613,7 @@ static int translate(struct thread *th, struct proc *to, struct txn *t, char *da
              (unsigned long long)n, (unsigned long long)t->data_size,
              (unsigned long long)offs[0], n > 1 ? (unsigned long long)offs[1] : 0ULL);
     for (u64 i = 0; i < n; i++) {
-        if (offs[i] + sizeof(struct fbo) > t->data_size) {
+        if (t->data_size < sizeof(struct fbo) || offs[i] > t->data_size - sizeof(struct fbo) || (offs[i] & 3)) {
             V("   !! offset %llu out of %llu", (unsigned long long)offs[i], (unsigned long long)t->data_size);
             return -1;
         }
@@ -594,7 +662,9 @@ struct held *h = &t->held[t->nheld];
              * The node is keyed by both fields, so the pair stays unique; only which one is
              * treated as the object changes.
              */
-            struct node *nd = node_get(p, o->cookie, o->binder, 1);
+            if (!o->binder && !o->cookie) break;
+            struct node *nd = node_get(p, o->binder, o->cookie, 1);
+            if (!nd) return -1;
             int strong = o->type == T_BINDER;
             /*
              * A binder object on its way home does not take a new reference.
@@ -615,8 +685,8 @@ struct held *h = &t->held[t->nheld];
                   (unsigned)nd->ptr, (unsigned)nd->cookie,
                   nd->owner ? nd->owner->pid : 0, to->pid, (unsigned)t->code);
                 o->type = strong ? T_BINDER : T_WEAK_BINDER;
-                o->binder = (u32)nd->cookie;
-                o->cookie = (u32)nd->ptr;
+                o->binder = (u32)nd->ptr;
+                o->cookie = (u32)nd->cookie;
                 ref_inc_home(t, nd, strong);
                 break;
             }
@@ -678,11 +748,51 @@ struct held *h = &t->held[t->nheld];
              * android.app.ApplicationThreadProxy@... (pid=6082) when registering receiver".
              * The kernel hands the original pointer back for exactly this reason.
              */
+            /*
+             * addService gives the object to servicemanager, and there it must stay an object.
+             *
+             * Measured on this image: system_server's first addService went out as
+             *   obj[0] type=0x73682a85 binder=0x1 cookie=0x0
+             * (BINDER_TYPE_HANDLE, handle 1) and servicemanager then did nothing at all —
+             * not one reply, not one further ioctl, its log file empty. It resolves a handle
+             * against ITS OWN table, and handle 1 does not exist there: the number belonged
+             * to the sender. The kernel keeps a BINDER_TYPE_BINDER a BINDER_TYPE_BINDER for
+             * exactly this reason — binder_get_node() is what the service registry stores,
+             * not a per-process number.
+             *
+             * Every other transfer to servicemanager keeps the handle form; only the publish
+             * call carries an object it has to hold on to.
+             */
+            /*
+             * Publishing to the context manager: the receiver keeps the node, not a number.
+             *
+             * addService is the one call where servicemanager has to hold on to the object
+             * itself, and it stores it in a map keyed by the IBinder it was handed. Two shapes
+             * were measured on this image and both failed, in different ways:
+             *
+             *   BINDER_TYPE_HANDLE, binder = sender's number (1)
+             *     servicemanager resolves a handle against ITS OWN table; handle 1 is not there,
+             *     so binder == NULL, addService answers -1, and every getService that follows
+             *     is answered with ffffffff. Measured: 62 lookups, 3 replies, all -1.
+             *
+             *   BINDER_TYPE_BINDER, binder = sender's weakref, cookie = sender's object
+             *     The receiver reads those addresses in ITS address space. Both read as zero
+             *     (obj[0] ... binder=0xac38(*=00000000) cookie=0xab34(*=00000000)), the
+             *     object is NULL, and addService answers -1 the same way.
+             *
+             * What the kernel does is different from both: it creates a node in the receiving
+             * process (binder_get_ref with a real descriptor from that process's table) and
+             * keeps the node alive for the registry. That is exactly ref_for_node(to, nd), and
+             * it is what this branch already computed as r. The descriptor is only unusable if
+             * the receiver's table never learns about it — so it has to be told, which is what
+             * the reference command below does.
+             */
             o->type = strong ? T_HANDLE : T_WEAK_HANDLE;
             o->binder = (u32)r->desc;
             o->cookie = 0;
-            V("   fbo out: type=0x%x binder=%u cookie=0x%x -> pid %d code %u",
-              o->type, (unsigned)o->binder, (unsigned)o->cookie, to->pid, (unsigned)t->code);
+            logf_("binder: PUBLISH->sm desc=%u node=%p owner=%d to=%d code=%u",
+                  (unsigned)r->desc, (void *)nd, nd->owner ? nd->owner->pid : 0,
+                  to->pid, (unsigned)t->code);
             ref_inc(r, strong); h->ref = r; h->strong = strong; t->nheld++;
             break;
         }
@@ -706,8 +816,8 @@ struct held *h = &t->held[t->nheld];
              * than handing over a number the receiver is about to look up anyway.
              */
             if (!r) {
-                V("   handle %u unknown to pid %d — passed through", (unsigned)o->binder, p->pid);
-                break;
+                V("   handle %u unknown to pid %d", (unsigned)o->binder, p->pid);
+                return -1;
             }
             /*
              * A handle always goes out as a handle, even when it is on its way back to the process
@@ -731,8 +841,8 @@ struct held *h = &t->held[t->nheld];
              */
             if (r->node->owner && r->node->owner->pid == to->pid) {
                 o->type = strong ? T_BINDER : T_WEAK_BINDER;
-                o->binder = (u32)r->node->cookie;
-                o->cookie = (u32)r->node->ptr;
+                o->binder = (u32)r->node->ptr;
+                o->cookie = (u32)r->node->cookie;
                 ref_inc_home(t, r->node, strong);
                 logf_("binder: HANDLE-HOME pid %d desc %u -> pid %d obj=0x%x code %u",
                       p->pid, (unsigned)o->binder, to->pid, (unsigned)o->cookie, (unsigned)t->code);
@@ -800,7 +910,8 @@ static void proc_release_keep_nodes(struct proc *p) {
             for (struct work *w = th->todo.head, *wx; w; w = wx) { wx = w->next; free(w); }
             th->todo.head = th->todo.tail = 0;
         }
-        if (th->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); th->fd = -1; }
+        if (th->fd >= 0 && th->fd != g_listen_fd) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); }
+        th->fd = -1;
         free(th);
     }
     p->threads = 0;
@@ -918,8 +1029,8 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
              */
             V("   !! no target for handle %u (node %p owner %p) -> error reply",
               m->handle, (void *)n, n ? (void *)n->owner : 0);
-            u32 e = 0;
-            sb_send(th, SB_R_ERROR, &e, 4, 0, 0, 0);
+            sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
+            sb_send(th, SB_R_DEAD_REPLY, 0, 0, 0, 0, 0);
             txn_free(t);
             return;
         }
@@ -943,7 +1054,11 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     }
     if (translate(th, to, t, t->data) < 0) {
         V("   !! translate failed for code %u", m->code);
-        sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0); txn_free(t); return;
+        sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
+        sb_send(reply && target_thread ? target_thread : th, SB_R_FAILED_REPLY, 0, 0, 0, 0, 0);
+        if (reply && in_reply_to) { in_reply_to->from = 0; txn_free(in_reply_to); }
+        txn_free(t);
+        return;
     }
     if (t->target) {
         t->target->local_strong++;
@@ -965,6 +1080,26 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
     // (guest_binder.c: t->acks++ right after the send) — and waits in SB_WAIT until the count drops.
     // It has to leave before the transaction itself: libbinder expects the acceptance first, and a
     // transaction that overtakes it makes the guest read its own answer as somebody else's.
+    while (th->todo.head && th->todo.head->type == W_NODE) {
+        struct work *w = wq_pop(&th->todo);
+        struct node *node = w->node;
+        node->queued = 0;
+        u32 commands[32];
+        int count = emit_node(node, commands);
+        struct sb_ptr_cookie changes[4];
+        int used = 0;
+        for (int i = 0; i + 5 <= count && used < 4; i += 5) {
+            changes[used].op = commands[i] == BR_INCREFS ? SB_REF_INCREFS :
+                               commands[i] == BR_ACQUIRE ? SB_REF_ACQUIRE :
+                               commands[i] == BR_RELEASE ? SB_REF_RELEASE : SB_REF_DECREFS;
+            changes[used].pad = 0;
+            memcpy(&changes[used].ptr, commands + i + 1, 8);
+            memcpy(&changes[used].cookie, commands + i + 3, 8);
+            used++;
+        }
+        if (used) sb_send(th, SB_R_REF, changes, used * sizeof changes[0], 0, 0, 0);
+        free(w);
+    }
     sb_send(th, SB_R_ACK, 0, 0, 0, 0, 0);
     V("   -> pid %d/%d fd %d: ack (%s)", p->pid, th->tid, th->fd, reply ? "reply" : "transact");
     queue_txn(t, target_thread);
@@ -983,139 +1118,7 @@ static void do_transact(struct thread *th, struct sb_txn *m, char *payload, int 
  */
 static struct thread *g_cur_th;
 
-static int emit_node(struct node *n, u32 *br) {
-    int k = 0;
-    /*
-     * A queued node has to still be alive when its turn comes.
-     *
-     * W_NODE carries a bare pointer, and node_free_if_unused is free to release the
-     * node between the moment the work item is queued and the moment this runs. What
-     * arrives here then is memory that no longer belongs to us: ptr and cookie read as
-     * zero, so a reference command goes out naming 0 as an object and the guest dies
-     * reading *(0). That is the fault this image has been dying on.
-     *
-     * A live node always has an owner. Checking it costs one compare and turns the
-     * crash into a skipped message.
-     */
-    if (!n || !n->ptr) {
-        logf_("binder: ★ узел в очереди мёртв (n=%p) — пропускаю", (void *)n);
-        return 0;
-    }
-    /*
-     * No owner means the process that published the object is gone, not that the node is dead.
-     * It still has to answer for the handles other processes hold — releasing them is exactly
-     * what they need — so only a missing object address disqualifies a node here.
-     */
-    if (!n->owner) { n->has_strong = n->has_weak = 0; n->internal_strong = 0; return 0; }
-    /*
-     * has_weak / has_strong say what the guest currently believes about this node.
-     *
-     * They used to be derived from counters that emit_node itself incremented
-     * (local_weak++ on INCREFS), and those counters were also read back into the
-     * test — so the condition became true on the strength of the previous send and
-     * could never go false again. The guest was told BR_INCREFS for every node it
-     * ever touched and never told BR_DECREFS for any of them: 260 INCREFS and zero
-     * DECREFS in one session. Each of those entries stays in the guest's weak
-     * reference table forever, pointing at an object the owner may since have
-     * freed; the next BR_ACQUIRE on that node runs RefBase::incStrong through a
-     * dangling mRefs and dereferences whatever the freed memory now holds.
-     *
-     * So the decision is a plain comparison between what the node needs now and
-     * what the guest already has. local_weak / local_strong still count outstanding
-     * unconfirmed sends for the accounting elsewhere, but they no longer decide
-     * anything here.
-     */
-    int strong = n->internal_strong;
-/*
-     * The payload is {ptr, cookie} — the standard pair.
-     *
-     * The cookie is not an arbitrary identifier on this image. flatten_binder fills it
-     * with RefBase::getWeakRefs(), so it is the object's own mRefs pointer:
-     *
-     *   31c4e: bl   RefBase::getWeakRefs
-     *   31c52: str  r4, [sp, #12]     .binder = obj
-     *   31c54: str  r0, [sp, #8]      .cookie = weakref_type*
-     *
-     * And the acquire path reads exactly that back out of the object:
-     *
-     *   2d548: r5 = *(parcel + 4)                    second word = ptr
-     *   2d54a: r0 = *(r5)                            mRefs
-     *   2d54e: r0 = mRefs - 12
-     *   2d550: r1 = *(mRefs - 12)                    vtable slot
-     *   2d556: incStrong(ptr + r1, ptr)
-     *
-     * So *(ptr) must equal the cookie for the object to still be the one the guest
-     * published. Repeating the pointer in the cookie slot threw that check away; the
-     * shim now compares the two and drops the command when they differ.
-     */
-#define PUT(c) do { br[k] = (c); br[k + 1] = (unsigned)(n->ptr); br[k + 2] = 0; br[k + 3] = (unsigned)(n->ptr); br[k + 4] = 0; k += 5; } while (0)
-    /*
-     * BR_INCREFS does not exist in this firmware's libbinder.
-     *
-     * libutils.so 0x202e4 is RefBase::weakref_type::incWeak, and only two call
-     * sites reach it in the whole library — both inside AssetManager. Nothing in
-     * IPCThreadState::executeCommand calls it, and 0x80087207 (BR_INCREFS with a
-     * pointer-cookie payload) appears nowhere in the binary, while 0x80087208
-     * (BR_ACQUIRE) appears once. The command word was therefore never handled: it
-     * fell through to whatever case the compiler placed next to it, which is the
-     * acquire path, and the guest ran incStrong on a pointer that only ever
-     * carried weak references. That is the crash on 0xa9ed0911.
-     *
-     * It also explains the counters: 300 BR_INCREFS and no BR_INCREFS_DONE in a
-     * single session. The guest never acknowledged any of them, pend_weak never
-     * dropped, and node_work refused to run for those nodes forever.
-     *
-     * So for a firmware that predates weak references the only reference command
-     * worth sending is the strong one. Weak bookkeeping stays in the daemon.
-     */
-    if (n->nrefs <= 0) {
-        /*
-         * Nobody holds this node any more, so there is nothing left to protect.
-         *
-         * internal_strong exists to keep the owner's object alive while other processes hold
-         * handles to it. It is raised when the object is published and stays up until the last
-         * handle goes away. If every reference is gone before the acquire has been delivered,
-         * the owner has already dropped its own sp<> and the object is being destroyed this
-         * instant — running incStrong on it now walks freed memory. The last run died exactly
-         * so, on ptr=0x000ee680 whose first word had already been overwritten with 6.
-         *
-         * Dropping the acquire in that case is not a leak: there is no object left to keep.
-         */
-        n->internal_strong = 0;
-        strong = 0;
-    }
-    if (n->ptr == 0) {
-        /*
-         * Nothing to acquire: the node has no object address yet.
-         *
-         * PUT writes n->ptr into the payload, and executeCommand on this firmware dereferences it
-         * (incStrong, libutils+0x20306). A node that was created from a handle — which is how
-         * mediaserver's first lookups arrive — has cookie set but ptr still zero until the owner
-         * publishes the object. Sending an acquire for it means incStrong on address 0, and
-         * mediaserver died exactly there: PC=0xa9d20306, LR=0xa9d2d55b (the BR_ACQUIRE branch of
-         * executeCommand). Skipping it costs nothing; when the object really is published the
-         * node's own emit carries the acquire.
-         */
-        n->internal_strong = 0;
-        strong = 0;
-    }
-    if (strong && !n->has_strong) { PUT(BR_ACQUIRE); n->has_strong = 1; n->pend_strong = 1; }
-    if (!strong && n->has_strong) { PUT(BR_RELEASE); n->has_strong = 0; }
-#undef PUT
-    /*
-     * Say what is about to be handed to the guest as an object address.
-     *
-     * The acquire path on this firmware walks the pointer: *(ptr), -12, *(that),
-     * add, then RefBase::incStrong. If ptr is not an object the guest dies with a
-     * fault address that has no visible connection to the message that caused it,
-     * which is why this has been hard to pin down. One line per send, only while
-     * verbose is on, makes the connection direct.
-     */
-    if (k) V("emit node ptr=0x%08x cookie=0x%08x strong=%d k=%d br=[%08x %08x %08x %08x %08x]",
-             (unsigned)n->ptr, (unsigned)n->cookie, strong, k,
-             br[0], br[1], br[2], br[3], br[4]);
-    return k;
-}
+#include "sb_nodes.inc"
 static int deliverable(struct thread *th) {
     // A reply addressed to this thread carries the answer to the call sitting on its stack: the
     // stack is expected to be non-empty, and refusing it there was what kept every reply undelivered
@@ -1129,71 +1132,12 @@ static int deliverable(struct thread *th) {
      * "посылка БЕЗ чтения" — after which its stream was off by one message and binder_loop died
      * with "ioctl failed (Transport endpoint is not connected)".
      */
-    if (th->is_pump) return 0;
+    if (!th || th->fd < 0 || !th->proc || th->is_pump || !th->waiting) return 0;
     if (th->todo.head) return 1;
     return !th->stack && th->proc->todo.head;
 }
-static int wr_all(int fd, const void *buf, size_t len) {
-    const char *p = buf;
-    while (len) {
-        ssize_t n = write(fd, p, len);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            /*
-             * A full buffer must not stall the daemon.
-             *
-             * The alarm connection belongs to the guest, and this write happens on the thread
-             * that is delivering somebody else's transaction. When it was blocking and the
-             * guest had not drained it yet, the whole daemon stopped inside translate():
-             * "wake pid 16805 (alarm tid 16810 fd 14)" was the last line before the boot froze,
-             * and system_server's first addService was never acknowledged. The nudge is only a
-             * hint that work is waiting — the guest also comes back on its own — so dropping it
-             * when the buffer is full is safe.
-             */
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-            return -1;
-        }
-        if (n == 0) { errno = EPIPE; return -1; }
-        p += n; len -= (size_t)n;
-    }
-    return 0;
-}
-
 static int sb_send(struct thread *th, u32 type, const void *body, u32 blen, const int *fds, int nfds, u32 flags) {
-    struct sb_hdr h;
-    memset(&h, 0, sizeof h);
-    h.len = (u32)(sizeof h + blen);
-    h.type = (u16)type;
-    h.nfds = (u16)nfds;
-    h.tid = ++th->iseq;
-    h.flags = SB_F_MAGIC | flags;
-    if (nfds > 0) {
-        struct iovec iov[1] = { { &h, sizeof h } };
-        char cbuf[CMSG_SPACE(sizeof(int) * SB_MAXFDS)];
-        struct msghdr m;
-        memset(&m, 0, sizeof m);
-        memset(cbuf, 0, sizeof cbuf);
-        m.msg_iov = iov; m.msg_iovlen = 1;
-        m.msg_control = cbuf;
-        m.msg_controllen = CMSG_SPACE(sizeof(int) * (size_t)nfds);
-        struct cmsghdr *cm = CMSG_FIRSTHDR(&m);
-        cm->cmsg_level = SOL_SOCKET;
-        cm->cmsg_type = SCM_RIGHTS;
-        cm->cmsg_len = CMSG_LEN(sizeof(int) * (size_t)nfds);
-        memcpy(CMSG_DATA(cm), fds, sizeof(int) * (size_t)nfds);
-        ssize_t n;
-        do { n = sendmsg(th->fd, &m, MSG_NOSIGNAL); } while (n < 0 && errno == EINTR);
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
-        if (n != (ssize_t)sizeof h) {
-            logf_("binder: SEND-FAIL type %u tid %d fd %d: %s", type, th->tid, th->fd, strerror(errno));
-            return -1;
-        }
-        if (!blen) return 0;
-    } else {
-        if (wr_all(th->fd, &h, sizeof h) < 0) return -1;
-        if (!blen) return 0;
-    }
-    return wr_all(th->fd, body, blen);
+    return io_send(th, type, body, blen, fds, nfds, flags);
 }
 
 static void deliver(struct thread *th) {
@@ -1240,15 +1184,29 @@ static void deliver(struct thread *th) {
          * So the pool may drain the process queue too, and only a W_NODE item is put back for the
          * main thread to handle.
          */
-        struct wq *q = th->todo.head ? &th->todo : &p->todo;
+        struct wq *q = th->todo.head ? &th->todo : th->stack ? 0 : &p->todo;
+        if (q && q->head && q->head->type == W_NODE && nnodes == 16) break;
         struct work *w = q ? wq_pop(q) : 0;
         if (!w) break;
-        if (w->type == W_NODE && !th->is_main) {
-            w->next = p->todo.head;
-            p->todo.head = w;
-            if (!p->todo.tail) p->todo.tail = w;
-            break;
-        }
+        /*
+         * Reference commands are not the main thread's business.
+         *
+         * W_NODE was pushed back on the process queue here whenever the thread that popped it
+         * was not the main one, so a pool thread could take the item, decide it was not allowed
+         * to act on it, put it back and leave — doing no work at all. With the main thread
+         * sitting in waiting=1 (it is inside a call to servicemanager), ready_thread() never
+         * gives it anything, the item stays at the head of the queue, and kick_proc spins:
+         *
+         *   stuck: tid 9131 fd 11 (main) waiting=1 stack=yes todo=no
+         *   stuck: tid 9139 fd 12 waiting=0 stack=no todo=no
+         *
+         * 6465 times per thread in one run. The daemon never returned to accept(), the next
+         * guest connection was reset during its HELLO, and everything after it failed with
+         * "Socket not connected".
+         *
+         * emit_node only builds reference commands and writes them to the socket of whichever
+         * thread is doing the work; nothing in it needs the main thread.
+         */
         switch (w->type) {
         case W_COMPLETE:
         case W_ACK: ack++; break;
@@ -1261,6 +1219,7 @@ static void deliver(struct thread *th) {
         case W_CLEAR_DONE: dead_cookie = w->cookie; have_clear = 1; break;
         case W_TXN: t = w->t; break;
         case W_SPAWN: have_spawn = 1; break;
+        case W_REF: break;
         }
         free(w);
         if (t || have_dead || have_clear || have_err || have_spawn) break;
@@ -1310,7 +1269,14 @@ static void deliver(struct thread *th) {
         m.sender_euid = t->sender_euid;
         m.data_size = t->data_size;
         m.offsets_size = t->offsets_size;
-        if (t->target) { m.node_ptr = t->target->ptr; m.node_cookie = t->target->ptr; }
+        /*
+         * The pair the guest uses to rebuild the object: .cookie is the object, .binder its
+         * weakref. Both were being filled with ptr, so unflatten_binder of this firmware read
+         * the object out of .cookie and got the weakref instead — every rebuilt local binder
+         * pointed at a weakref_impl, and the first incStrong on it walked a vtable that belonged
+         * to a counter block.
+         */
+        if (t->target) { m.node_ptr = t->target->ptr; m.node_cookie = t->target->cookie; }
         // no padding between the parcel and its offset table: the guest writes them back to back
     // and reads them back the same way, so rounding up here desynchronised the two sides
     u64 total = t->data_size + t->offsets_size;
@@ -1326,6 +1292,10 @@ static void deliver(struct thread *th) {
         if (t->nheld || t->nfds || t->target) {
             struct dbuf *b = zalloc(sizeof *b);
             b->proc = p;
+            do { b->id = ++p->next_buf; } while (!b->id);
+            m.pad = b->id;
+            memcpy(buf, &m, sizeof m);
+            b->async_node = !t->reply && (t->flags & TF_ONE_WAY) ? t->target : 0;
             b->held = t->held;
             b->nheld = t->nheld;
             t->held = 0;
@@ -1408,7 +1378,7 @@ static void proc_release(struct proc *p) {
             for (struct work *w = th->todo.head, *wx; w; w = wx) { wx = w->next; free(w); }
             th->todo.head = th->todo.tail = 0;
         }
-        if (th->fd >= 0) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); }
+        if (th->fd >= 0 && th->fd != g_listen_fd) { epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0); close(th->fd); }
         /*
          * Detach, never free.
          *
@@ -1481,11 +1451,12 @@ static void do_death(struct thread *th, struct sb_death *m) {
 }
 
 static void buf_release(struct proc *p, u64 id) {
-    (void)id;
     struct dbuf *b = p->bufs;
+    while (b && b->id != id) b = b->next;
     if (!b) return;
-    p->bufs = b->next;
-    if (b->next) b->next->prev = 0;
+    if (b->prev) b->prev->next = b->next;
+    else p->bufs = b->next;
+    if (b->next) b->next->prev = b->prev;
     if (b->async_node) {
         struct node *n = b->async_node;
         struct work *w = wq_pop(&n->async);
@@ -1498,120 +1469,74 @@ static void buf_release(struct proc *p, u64 id) {
     free(b);
 }
 
-static uint8_t *rxbuf;
-static size_t rxcap;
+static void disconnect_thread(struct thread *th) {
+    if (th->fd >= 0) {
+        epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0);
+        close(th->fd);
+        th->fd = -1;
+    }
+    io_dispose(th);
+    th->waiting = 0;
+    if (th->proc) {
+        if (th->proc->pump == th) th->proc->pump = 0;
+        if (ctx_th == th) ctx_th = 0;
+    }
+}
+
+static int valid_message(struct thread *th, const struct sb_hdr *h, const u8 *body, u32 len) {
+    if (h->type == SB_HELLO)
+        return !th->proc && len == sizeof(struct sb_hello) && h->nfds == 0;
+    if (!th->proc || h->tid != (u32)th->tid) return 0;
+    switch (h->type) {
+    case SB_TRANSACT:
+    case SB_REPLY: {
+        if (len < sizeof(struct sb_txn)) return 0;
+        struct sb_txn tx;
+        memcpy(&tx, body, sizeof tx);
+        u64 room = len - sizeof tx;
+        return tx.data_size <= room && tx.offsets_size == room - tx.data_size &&
+               tx.offsets_size % sizeof(u64) == 0;
+    }
+    case SB_SET_MAX_THREADS:
+    case SB_LOOPER: return len == 4 && h->nfds == 0;
+    case SB_REF: return len == sizeof(struct sb_ref) && h->nfds == 0;
+    case SB_REF_DONE:
+    case SB_NODE_FREE: return len == sizeof(struct sb_ptr_cookie) && h->nfds == 0;
+    case SB_DEATH: return len == sizeof(struct sb_death) && h->nfds == 0;
+    case SB_DEAD_DONE: return len == 8 && h->nfds == 0;
+    case SB_ASYNC_DONE: return (len == 0 || len == 8) && h->nfds == 0;
+    case SB_SET_CTX_MGR:
+    case SB_WAIT:
+    case SB_UNWAIT:
+    case SB_BYE: return len == 0 && h->nfds == 0;
+    default: return 0;
+    }
+}
 
 static void on_message(struct thread *th) {
     if (th->fd < 0) return;
-    struct sb_hdr h;
-    char cbuf[CMSG_SPACE(sizeof(int) * SB_MAXFDS)];
-    struct iovec iov = { &h, sizeof h };
-    struct msghdr m;
-    memset(&m, 0, sizeof m);
-    m.msg_iov = &iov;
-    m.msg_iovlen = 1;
-    m.msg_control = cbuf;
-    m.msg_controllen = sizeof cbuf;
-    ssize_t n;
-    do { n = recvmsg(th->fd, &m, MSG_CMSG_CLOEXEC); } while (n < 0 && errno == EINTR);
-    if (n <= 0) {
-        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
-            /*
-             * Never release a process because one of its links closed.
-             *
-             * Every disconnect used to run proc_release, and for a main thread that wipes the whole
-             * process: its threads, its queue, and — when it was the context manager — ctx_mgr
-             * itself. One closed connection therefore took out the entire service registry, which
-             * is exactly the failure that stalled the boot at Starting Activity Manager while
-             * servicemanager reported "ioctl failed (Transport endpoint is not connected)".
-             * A link closing only means this thread stopped talking; the nodes it published stay
-             * alive because other processes may hold references to them.
-             */
-            logf_("binder: link closed tid %d pid %d (n=%d errno=%d)%s", th->tid,
-                  th->proc ? th->proc->pid : -1, (int)n, errno,
-                  th->is_main ? " main" : th->is_pump ? " alarm" : "");
-            if (th->proc && th->is_main) proc_release(th->proc);
-            else if (th->proc) {
-                struct proc *p = th->proc;
-                struct thread **pp = &p->threads;
-                while (*pp) { if (*pp == th) { *pp = th->next; break; } pp = &(*pp)->next; }
-                epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0);
-                close(th->fd);
-                free(th);
-            }
-        }
+    int received = io_receive(th);
+    if (received == 0) return;
+    if (received < 0) {
+        V("binder: link closed tid %d pid %d errno=%d", th->tid,
+          th->proc ? th->proc->pid : -1, errno);
+        disconnect_thread(th);
         return;
     }
-    /*
-     * Finish the header; never return with bytes still in the socket.
-     *
-     * recvmsg on a stream socket is free to hand back fewer bytes than the header, and the old
-     * "if (n != sizeof h) return;" dropped the loop with that partial header still queued. Level
-     * triggered epoll then fired again immediately, read the same bytes again, and returned again —
-     * daemon never touched another connection. Measured: 557559 connect() attempts from the guests
-     * against 14 accepts, the log frozen at 114 lines right after "out of sync: len=0 type=16
-     * tid=11 flags=0x72ac", which is exactly a header read from the wrong offset.
-     */
-    while ((size_t)n < sizeof h) {
-        ssize_t r = recv(th->fd, (char *)&h + n, sizeof h - (size_t)n, 0);
-        if (r > 0) { n += r; continue; }
-        if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            static unsigned partial_spins;
-            if (++partial_spins > 200) { partial_spins = 0; return; }
-            usleep(200);
-            continue;
-        }
+    struct sb_hdr h = th->io.header;
+    u32 blen = h.len - sizeof h;
+    uint8_t *rxbuf = th->io.body;
+    if (!valid_message(th, &h, rxbuf, blen)) {
+        V("binder: rejected frame type=%u tid=%u len=%u", h.type, h.tid, h.len);
+        disconnect_thread(th);
         return;
     }
-    if ((h.flags & SB_F_MAGIC_MASK) != SB_F_MAGIC) {
-        /*
-         * Dump the raw header, not just the decoded fields.
-         *
-         * The decoded values say len=1, which is exactly sb_hello.pid for init — so the read looks
-         * shifted by the 16 bytes of a header. Raw words settle whether the guest wrote a body first
-         * or the daemon started reading mid-message.
-         */
-        logf_("sensesbinderd: ★ out of sync: len=%u type=%u tid=%u flags=%#x raw=%08x %08x %08x %08x",
-              h.len, h.type, h.tid, h.flags,
-              ((const unsigned *)&h)[0], ((const unsigned *)&h)[1],
-              ((const unsigned *)&h)[2], ((const unsigned *)&h)[3]);
-        return;
-    }
-    int fds[SB_MAXFDS], nfds = 0;
-    /*
-     * Name every message before dispatching it.
-     *
-     * The daemon goes silent right after "accepted fd 18" and the heartbeat stops with it, so it is
-     * stuck inside one handler. Logging the type on the way in — the last line printed names the
-     * handler that never returned. Rate limited to the first 200 so a hot loop cannot flood.
-     */
-    {
-        static unsigned seen;
-        if (seen < 200) { seen++; logf_("binder: msg type=%u len=%u tid=%u fd=%d", h.type, h.len, h.tid, th->fd); }
-    }
-    for (struct cmsghdr *c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
-        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
-            nfds = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-            if (nfds > SB_MAXFDS) nfds = SB_MAXFDS;
-            memcpy(fds, CMSG_DATA(c), (size_t)nfds * sizeof(int));
-        }
-    u32 blen = h.len > sizeof h ? h.len - (u32)sizeof h : 0;
-    if (blen > SB_MAXMSG) { for (int i = 0; i < nfds; i++) close(fds[i]); return; }
-    if (blen > rxcap) {
-        uint8_t *p = realloc(rxbuf, blen);
-        if (!p) { for (int i = 0; i < nfds; i++) close(fds[i]); return; }
-        rxbuf = p;
-        rxcap = blen;
-    }
-    if (blen) {
-        size_t got = 0;
-        while (got < blen) {
-            ssize_t r = read(th->fd, rxbuf + got, blen - got);
-            if (r < 0) { if (errno == EINTR) continue; for (int i = 0; i < nfds; i++) close(fds[i]); return; }
-            if (r == 0) { for (int i = 0; i < nfds; i++) close(fds[i]); return; }
-            got += (size_t)r;
-        }
-    }
+    int fds[SB_MAXFDS], nfds = th->io.nfds;
+    memcpy(fds, th->io.fds, (size_t)nfds * sizeof(int));
+    th->io.nfds = 0;
+    th->io.header_used = 0;
+    th->io.body_used = 0;
+    V("binder: msg type=%u len=%u tid=%u fd=%d", h.type, h.len, h.tid, th->fd);
     cur = th;
     switch (h.type) {
     case SB_HELLO: {
@@ -1740,9 +1665,9 @@ static void on_message(struct thread *th) {
             struct sb_ptr_cookie *pc = (struct sb_ptr_cookie *)rxbuf;
             struct node *n = node_get(p, pc->ptr, pc->cookie, 0);
             if (n) {
-                if (n->pend_weak > 0) n->pend_weak--;
-                if (n->pend_strong > 0) n->pend_strong--;
-                node_work(n);
+                if (pc->op == SB_REF_INCREFS && n->pend_weak > 0) n->pend_weak--;
+                if (pc->op == SB_REF_ACQUIRE && n->pend_strong > 0) n->pend_strong--;
+                if (n->ptr) node_work(n); else { n->pend_strong = 0; n->internal_strong = 0; }
             }
         }
         break;
@@ -1776,10 +1701,37 @@ static void on_message(struct thread *th) {
     case SB_BYE: {
         struct proc *p = th->proc;
         if (!p) break;
+        /*
+         * The descriptor and the epoll registration belong to the thread that is leaving.
+         *
+         * Only the number was cleared here: the socket stayed open with nobody holding it, and
+         * the epoll entry still pointed at the struct that is freed two lines later. Both were
+         * leaks that grew with every thread that left — and every pool thread that exits does
+         * this. Del the registration first, then close, then free.
+         */
+        /*
+         * Never touch the listening socket from here.
+         *
+         * The descriptor numbers of threads that died are handed straight back out by the
+         * allocator, so a stale th->fd can name the listening socket or a socket that now
+         * belongs to a different thread of the same process. EPOLL_CTL_DEL on the listening
+         * socket removes it from the set for good: the daemon keeps running (heartbeats still
+         * appear) but never accepts again, and every guest connect is answered with
+         * ECONNREFUSED. Measured: errno=111 on 30 consecutive connect attempts while the daemon
+         * was alive, and "accepted fd" stuck at 9.
+         *
+         * Ownership is decided by what the epoll set actually holds: the thread pointer is only
+         * valid as a key while the socket it names is the one that was registered for it.
+         */
+        if (th->fd >= 0 && th->fd != g_listen_fd) {
+            epoll_ctl(ep, EPOLL_CTL_DEL, th->fd, 0);
+            close(th->fd);
+        }
         th->fd = -1;
         struct thread **pp = &p->threads;
         while (*pp) { if (*pp == th) { *pp = th->next; break; } pp = &(*pp)->next; }
-        free(th);
+        if (p->pump == th) p->pump = 0;
+        io_dispose(th);
         break;
     }
     case SB_ASYNC_DONE:
@@ -1804,85 +1756,15 @@ static void on_message(struct thread *th) {
     }
     for (int i = 0; i < nfds; i++) close(fds[i]);
     cur = 0;
+    g_cur_th = 0;
 }
 
-int main(int argc, char **argv) {
-    const char *path = 0;
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-s") && i + 1 < argc) path = argv[++i];
-        else if (!strcmp(argv[i], "-v")) verbose = 1;
-        else if (argv[i][0] != '-') path = argv[i];
-    }
-    if (!path) { fprintf(stderr, "usage: sensesbinderd -s <socket> [-v]\n"); return 2; }
-    signal(SIGPIPE, SIG_IGN);
-    setvbuf(stderr, 0, _IOLBF, 0);
-    struct rlimit rl;
-    if (!getrlimit(RLIMIT_NOFILE, &rl)) { rl.rlim_cur = rl.rlim_max; setrlimit(RLIMIT_NOFILE, &rl); }
-    int ls = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    struct sockaddr_un sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sun_family = AF_UNIX;
-    strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
-    unlink(path);
-    if (bind(ls, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(ls, 1024) < 0) {
-        perror("sensesbinderd: bind");
-        return 1;
-    }
-    ep = epoll_create1(EPOLL_CLOEXEC);
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof ev);
-    ev.events = EPOLLIN;
-    ev.data.ptr = 0;
-    epoll_ctl(ep, EPOLL_CTL_ADD, ls, &ev);
-    logf_("sensesbinderd: listening on %s", path);
-    for (;;) {
-        struct epoll_event evs[64];
-        int n = epoll_wait(ep, evs, 64, -1);
-        if (n < 0) {
-            /*
-             * Never leave the loop because one epoll_wait failed.
-             *
-             * Breaking here stops the daemon from ever accepting another connection: the three
-             * processes that were already connected keep working, so the boot looks fine for a
-             * while, and every later one fails to connect forever. That is exactly what
-             * system_server hit — 8 attempts logged, then it sat retrying BC_ENTER_LOOPER once a
-             * second for the rest of the run while SurfaceFlinger and mediaserver were connected
-             * and answering. A failed wait is not a reason to stop serving.
-             */
-            if (errno == EINTR) continue;
-            logf_("binder: epoll_wait failed: %s", strerror(errno));
-            usleep(1000);
-            continue;
-        }
-        for (int i = 0; i < n; i++) {
-            /*
-             * Heartbeat: once a second, say whether the loop is still turning.
-             *
-             * guests queued 557559 connect() attempts against 14 accepts while the log stopped at
-             * 111 lines, so either epoll_wait stopped returning or a handler stopped returning. This
-             * line separates the two: if it keeps printing, the loop turns and the stall is inside a
-             * handler; if it goes silent, the loop itself is stuck.
-             */
-            {
-                static time_t hb_last;
-                time_t now = time(0);
-                if (now != hb_last) { hb_last = now; V("binder: heartbeat n=%d ptr=%p", n, evs[i].data.ptr); }
-            }
-            if (!evs[i].data.ptr) {
-                int fd = accept4(ls, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK);
-                if (fd >= 0) {
-                    logf_("binder: accepted fd %d", fd);
-                    struct thread *th = zalloc(sizeof *th);
-                    th->fd = fd;
-                    memset(&ev, 0, sizeof ev);
-                    ev.events = EPOLLIN;
-                    ev.data.ptr = th;
-                    epoll_ctl(ep, EPOLL_CTL_ADD, fd, &ev);
-                }
-            } else {
-                on_message((struct thread *)evs[i].data.ptr);
-            }
-        }
-    }
-    return 0;
-}
+/*
+ * Independent heartbeat.
+ *
+ * Every symptom left in this project depends on knowing whether the daemon is still turning:
+ * the guest reports ECONNREFUSED in thousands while the main-loop log goes quiet, and a quiet
+ * log cannot tell "stuck in a call" from "process gone". This thread prints a counter every
+ * second no matter what the main loop is doing, so one run answers it.
+ */
+#include "sb_main.inc"
