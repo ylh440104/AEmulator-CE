@@ -29,7 +29,6 @@ linux_user_ss.add(files(
   'guest_selinux.c',
   'guest_trace.c',
   'guest_log.c',
-  'fortify_stubs.c',
   'guest_tls.c',
   'elfload.c',
   'exit.c',
